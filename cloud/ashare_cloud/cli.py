@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import os
+import shutil
+import sqlite3
+import sys
+from pathlib import Path
+
+from .common import Calendar, digest, file_hash, now, read_json, validate_config, write_json
+from .engine import build_plan, simulate, verify_plan
+from .market import collect, scan_database, seed_database
+from .review import ai_review, evidence, render
+from .storage import Store
+
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config.json"
+
+
+def check_account(state):
+    if state.get("schema") != 1 or state["cash"] < 0:
+        raise ValueError("账本格式或现金错误")
+    prev = None
+    for _, plan in sorted(state["plans"].items()):
+        verify_plan(plan)
+        if plan["previous_plan_hash"] != prev:
+            raise ValueError("计划哈希链断裂")
+        prev = plan["hash"]
+    if prev != state.get("last_plan_hash"):
+        raise ValueError("计划链尾不一致")
+
+
+def initialize(root, legacy, cfg):
+    root, legacy = Path(root), Path(legacy)
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("初始化目标必须为空；不会重置已有云端账本")
+    # This distributed snapshot is flat. Validate rather than infer a portfolio from prose.
+    seed_fill = read_json(legacy / "data/fills/20261019.json")
+    value = seed_fill.get("market_value", seed_fill.get("hold_market_value"))
+    equity = seed_fill.get("total_asset", seed_fill.get("asset_after"))
+    cash = seed_fill.get("cash", seed_fill.get("cash_after"))
+    if (value != 0 or equity is None or cash is None or abs(cash - equity) > 0.011
+            or abs(equity - cfg["initial_cash"]) > 0.011 or seed_fill.get("forced_hold_n", 0)):
+        raise ValueError("原始账本已变更或存在持仓，请明确迁移持仓后再初始化")
+    root.mkdir(parents=True, exist_ok=True)
+    meta = seed_database(legacy / "data/market.db", root / "market.db", cfg["seed_sessions"])
+    state = {"schema": 1, "created_at": now().isoformat(), "cash": cfg["initial_cash"],
+             "equity": cfg["initial_cash"], "positions": [], "closed_trades": [],
+             "last_settled": None, "settlements": {}, "plans": {}, "last_plan_hash": None,
+             "provenance": {**meta, "original_seed_cash": cfg["initial_cash"],
+                            "original_fill_sha256": file_hash(legacy / "data/fills/20261019.json"),
+                            "note": "承接原10/19空仓现金；云端观察期另计，不事后补建旧计划"}}
+    write_json(root / "account.json", state)
+    print(f"初始化完成：{meta['stock_count']} 只，历史 {meta['seed_start']} 至 {meta['seed_end']}；现金 {state['cash']:.2f}")
+
+
+def execute(root, day, cfg, calendar, store=None, skip_ai=False):
+    root = Path(root)
+    state = read_json(root / "account.json")
+    check_account(state)
+    if not calendar.is_session(day):
+        print(f"{day} 为休市日，跳过。")
+        return
+    saved_review = root / "reviews" / f"{day}.json"
+    if day in state["settlements"]:
+        market = read_json(root / "snapshots" / f"{day}.json")
+        print(f"{day} 已结算；本次仅检查或补生成报告。")
+    else:
+        market = collect(root, day, cfg, calendar)
+        # Commit the exact-day market evidence first. A later engine failure remains recoverable.
+        if store:
+            store.push(root)
+        plan = state["plans"].get(day)
+        if not plan and state["last_settled"]:
+            raise ValueError("该交易日缺少盘前冻结计划，禁止盘后临时选股成交")
+        new_state, settlement = simulate(state, plan, market, day, calendar)
+        scan = scan_database(root / "market.db", day, cfg, calendar)
+        write_json(root / "scans" / f"{day}.json", scan)
+        # On archived recovery, never create an already started trading day's plan.
+        if calendar.next(day) > now().date().isoformat():
+            next_plan = build_plan(day, scan, new_state, cfg, calendar, now().isoformat())
+            new_state["plans"][next_plan["trade_date"]] = next_plan
+            new_state["last_plan_hash"] = next_plan["hash"]
+        write_json(root / "account.json", new_state)
+        state = new_state
+        if store:
+            store.push(root)
+        print(f"模拟结算已保存：总资产 {settlement['equity']:.2f}，当日 {settlement['day_pnl']:+.2f}")
+    facts = evidence(state, day, market)
+    error = None
+    if saved_review.exists() and read_json(saved_review).get("status") == "ok":
+        review = read_json(saved_review)
+    elif skip_ai:
+        review = {"status": "disabled", "content": "本次显式跳过 AI，仅展示程序计算结果。"}
+    else:
+        try:
+            review = ai_review(facts)
+        except (RuntimeError, ValueError) as exc:
+            error = str(exc)
+            review = {"status": "failed", "error": error, "generated_at": now().isoformat()}
+    write_json(saved_review, review)
+    render(root, facts, review)
+    if store:
+        store.push(root)
+    if error and cfg["ai_required"]:
+        raise RuntimeError(error + "；账本和失败状态已保存，重跑只补复盘。")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="A股每日模拟盘：GitHub Actions + R2")
+    parser.add_argument("command", choices=("init", "bootstrap", "run", "status", "restore"))
+    parser.add_argument("--state-dir", type=Path, default=Path(".cloud-state"))
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--legacy-root", type=Path)
+    parser.add_argument("--date", help="YYYY-MM-DD；历史补跑要求已有归档快照")
+    parser.add_argument("--local", action="store_true", help="使用本地状态，不读写 R2")
+    parser.add_argument("--skip-ai", action="store_true", help="仅用于检查，显式不生成 AI 复盘")
+    args = parser.parse_args(argv)
+    cfg = validate_config(read_json(args.config))
+    root = args.state_dir
+    if args.command == "init":
+        if not args.legacy_root:
+            parser.error("init 需要 --legacy-root")
+        initialize(root, args.legacy_root, cfg)
+    elif args.command == "bootstrap":
+        check_account(read_json(root / "account.json"))
+        store = Store()
+        if store.head():
+            raise ValueError("R2 已初始化；禁止再次覆盖。后续使用 run。")
+        store.push(root, bootstrap=True)
+        print("R2 初始化成功。")
+    elif args.command == "restore":
+        Store().pull(root)
+        check_account(read_json(root / "account.json"))
+        print("R2 状态恢复并校验完成。")
+    elif args.command == "status":
+        s = read_json(root / "account.json")
+        check_account(s)
+        print(json.dumps({k: s[k] for k in ("cash", "equity", "last_settled", "positions")}, ensure_ascii=False, indent=2))
+    else:
+        day = args.date or now().date().isoformat()
+        from datetime import date
+        date.fromisoformat(day)
+        cal = Calendar()
+        if not cal.is_session(day):
+            print(f"{day} 为休市日，跳过。")
+            return
+        if day > now().date().isoformat() or (day == now().date().isoformat() and now().hour < 15):
+            raise ValueError("只能在收盘后运行；日期统一使用北京时间")
+        store = None
+        if not args.local:
+            store = Store()
+            store.pull(root)
+        execute(root, day, cfg, cal, store, args.skip_ai)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        # Never print provider response bodies, authorization headers or endpoint query strings.
+        from botocore.exceptions import BotoCoreError, ClientError
+        if isinstance(exc, (BotoCoreError, ClientError)):
+            print("ERROR: R2 请求失败，请检查端点、权限和网络。", file=sys.stderr)
+        elif isinstance(exc, (ValueError, RuntimeError)):
+            print(f"ERROR: {exc}", file=sys.stderr)
+        else:
+            print(f"ERROR: {type(exc).__name__}；请检查配置和输入文件。", file=sys.stderr)
+        sys.exit(1)

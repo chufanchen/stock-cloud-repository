@@ -1,0 +1,22 @@
+# 原始快照保留在本机；云端仅需cloud/和工作流，避免上传大数据库和工作记忆。
+/AI进化初始版/
+/大投机家利弗莫尔/
+/最强AI/
+/德国股神科斯托拉尼/
+/股神巴菲特A股交易/
+/_共享依赖/
+.cloud-state*/
+.cloud.env
+.env
+*.env
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.parquet
+*.pkl

@@ -1,0 +1,20 @@
+{
+  "strategy_version": "v2.1-cloud1",
+  "initial_cash": 100013.62,
+  "lookback": 120,
+  "position_threshold": 0.10,
+  "per_pick": 5000,
+  "reduced_per_pick": 3500,
+  "max_chase_pct": 7.0,
+  "liquidity_max_ratio": 0.05,
+  "index_open_min_pct": -3.0,
+  "commission_rate": 0.00025,
+  "commission_min": 5.0,
+  "transfer_rate": 0.00001,
+  "stamp_rate": 0.0005,
+  "minimum_market_coverage": 0.97,
+  "minimum_universe_size": 3000,
+  "fetch_workers": 6,
+  "seed_sessions": 200,
+  "ai_required": true
+}

@@ -1,0 +1,67 @@
+name: A股每日模拟盘
+
+on:
+  schedule:
+    # UTC 12:37 / 13:37 = 北京时间20:37 / 21:37。第二次用于补偿失败，已完成则不重复成交。
+    # Tushare stk_auction_o 通常20:00更新。休市日由XSHG日历跳过。
+    - cron: '37 12,13 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: '留空为北京时间今天；历史补跑必须已有该日归档行情（YYYY-MM-DD）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ashare-paper-account
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TZ: Asia/Shanghai
+      PYTHONPATH: cloud
+      PYTHONUNBUFFERED: '1'
+      R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_PREFIX: ${{ vars.R2_PREFIX || 'wuming-v2' }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+      AI_MODEL: ${{ vars.AI_MODEL }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TRADE_DATE: ${{ inputs.trade_date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: cloud/requirements.lock
+      - name: 安装固定版本依赖
+        run: python -m pip install -r cloud/requirements.lock
+      - name: 读取R2、结算、选股、复盘并保存
+        shell: bash
+        run: |
+          args=()
+          if [ -n "$TRADE_DATE" ]; then
+            args+=(--date "$TRADE_DATE")
+          fi
+          python -m ashare_cloud.cli run --state-dir .cloud-state "${args[@]}"
+      - name: 保存可下载日报
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cloud-state/reports/
+            .cloud-state/scans/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30

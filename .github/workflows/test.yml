@@ -1,0 +1,20 @@
+name: 云端模拟盘测试
+on:
+  push:
+    paths: ['cloud/**', '.github/workflows/**']
+  pull_request:
+    paths: ['cloud/**', '.github/workflows/**']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python -m pip install -r cloud/requirements.lock pytest pyyaml
+      - run: python -m pytest cloud/tests -q
+        env:
+          PYTHONPATH: cloud
