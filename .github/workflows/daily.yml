@@ -11,6 +11,11 @@ on:
         description: '留空为北京时间今天；历史补跑必须已有该日归档行情（YYYY-MM-DD）'
         required: false
         type: string
+      mode:
+        description: 'run=结算、选股与会议；review=仅补已有结算日的会议'
+        type: choice
+        default: run
+        options: [run, review]
 
 permissions:
   contents: read
@@ -21,22 +26,25 @@ concurrency:
 
 jobs:
   daily:
+    # Server can own the schedule; manual disaster recovery remains available.
+    if: github.event_name == 'workflow_dispatch' || vars.DAILY_EXECUTOR != 'server'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
       TZ: Asia/Shanghai
       PYTHONPATH: cloud
       PYTHONUNBUFFERED: '1'
-      R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
-      R2_BUCKET: ${{ vars.R2_BUCKET }}
-      R2_PREFIX: ${{ vars.R2_PREFIX || 'wuming-v2' }}
+      R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL || secrets.R2_ENDPOINT_URL }}
+      R2_BUCKET: ${{ vars.R2_BUCKET || secrets.R2_BUCKET }}
+      R2_PREFIX: ${{ vars.R2_PREFIX || secrets.R2_PREFIX || 'wuming-v2' }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AI_BASE_URL: ${{ vars.AI_BASE_URL }}
-      AI_MODEL: ${{ vars.AI_MODEL }}
+      AI_BASE_URL: ${{ vars.AI_BASE_URL || secrets.AI_BASE_URL }}
+      AI_MODEL: ${{ vars.AI_MODEL || secrets.AI_MODEL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
       TRADE_DATE: ${{ inputs.trade_date }}
+      RUN_MODE: ${{ inputs.mode || 'run' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +61,7 @@ jobs:
           if [ -n "$TRADE_DATE" ]; then
             args+=(--date "$TRADE_DATE")
           fi
-          python -m ashare_cloud.cli run --state-dir .cloud-state "${args[@]}"
+          python -m ashare_cloud.cli "$RUN_MODE" --state-dir .cloud-state "${args[@]}"
       - name: 保存可下载日报
         if: always()
         uses: actions/upload-artifact@v4
@@ -62,6 +70,8 @@ jobs:
           path: |
             .cloud-state/reports/
             .cloud-state/scans/
+            .cloud-state/meeting/
+            .cloud-state/research/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 30

@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "max_tokens": 1800,
+  "summary_max_tokens": 3000,
+  "proposal_context_limit": 30,
+  "roles": [
+    {"id": "livermore", "name": "利弗莫尔 · 执行观察", "stage": "analysis", "model": "", "focus": "解释冻结规则下的选股、开盘条件、拒单和退出。区分可成交性与收益；不改变现行规则。"},
+    {"id": "buffett", "name": "巴菲特 · 价值与风险", "stage": "analysis", "model": "", "focus": "检查持仓集中、资金占用、数据缺口和长期风险。没有财报或公告时明确未知，不能编造基本面判断。"},
+    {"id": "kostolany", "name": "科斯托拉尼 · 市场环境", "stage": "analysis", "model": "", "focus": "检查已提供的市场环境证据与观察局限。没有宏观、新闻和情绪数据时列为待补数据，不凭空归因。"},
+    {"id": "researcher", "name": "AI进化 · 研究方法", "stage": "analysis", "model": "", "focus": "识别可证伪的问题、样本不足、未来信息泄漏与选择偏差。对比以前的研究提案，提出可执行的验证设计。"},
+    {"id": "auditor", "name": "最强AI · 交叉审计", "stage": "audit", "model": "", "focus": "阅读四席发言，指出冲突、缺证据的断言、重复提案及错误口径。意见一致不构成独立统计证据，不能宣称已执行回测。"}
+  ],
+  "moderator_model": ""
+}

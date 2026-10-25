@@ -1,7 +1,11 @@
 # 每日选股、模拟结算和 AI 复盘：部署指南
 
-本改造采用 **GitHub Actions 执行 Python，Cloudflare R2 保存行情和账本**。运行依赖和模型服务均与本机 WorkBuddy 分开。
+本改造支持 **自己的服务器或 GitHub Actions 执行 Python，Cloudflare R2 保存行情、账本、会议和记忆**。运行依赖和模型服务均与本机 WorkBuddy 分开。
 它只维护虚拟账户，不接券商。模型接口为通用 **Chat Completions 兼容接口**，地址、模型和密钥在部署时填写。
+
+新增默认多角色研究会议，详见 [会议室说明](MEETING.md)。你已有服务器时，推荐 [服务器部署方案](SERVER.md)：服务器主运行，GitHub保存代码/测试/手动补跑。下面保留完整Actions部署路线；两者选一个主调度端。
+
+结果展示使用 [GitHub Pages静态复盘台](PAGES.md)：GitHub定时读取R2的日报和会议结果，生成网页并发布。配置 `DAILY_EXECUTOR=server` 后，网页发布仍会继续。
 
 ## 1. 改造包含什么
 
@@ -12,7 +16,8 @@
 - 执行：事前冻结候选 → 次日按开盘条件模拟买入 → 下一交易日收盘平仓；涨停顺延一次；跌停无法卖出则继续持仓并估值。
 - 状态：云端独立账本承接原快照 **100,013.62元空仓现金**；原账本和历史计划不修改、不事后补交易。
 - 报告：中文 Markdown、可独立打开的 HTML、可复核 JSON；在 Actions 的 Artifacts 下载。
-- 复盘：程序计算金额，模型解释结果；模型没有改规则、改账本、下单或执行工具的权限。
+- 复盘：四席独立分析 → 一席交叉审计 → 主持人汇总；逐席保存进度，合并共享/角色记忆与待验证提案；通常六次成功模型调用。
+- 程序计算金额，模型解释结果；模型没有改规则、改账本、下单或执行工具的权限。交易参数仍在 `config.json`，会议设置独立位于 `meeting.json`。
 
 ## 2. 与原版的明确差异
 
@@ -52,10 +57,11 @@ GitHub 仓库 → **Settings → Secrets and variables → Actions**。
 | `R2_PREFIX` | `wuming-v2`，可省略；同一账户的所有任务必须一致 |
 | `AI_BASE_URL` | 服务商文档中的兼容接口基础地址，通常以 `/v1` 结尾；程序追加 `/chat/completions` |
 | `AI_MODEL` | 服务商提供的模型 ID，不能填聊天产品里的显示名或账号名 |
+| `DAILY_EXECUTOR` | 仅GitHub仓库变量；`server` 跳过Actions定时运行，保留手动补跑；省略/`github` 沿用Actions主运行 |
 
 R2 Token 应给指定桶 **Object Read & Write** 权限。Bucket 保持私有，不需要公开域名，也不需要 Cloudflare 全局 API Key。
 GitHub 的日常工作流只需仓库读取权限，不需要另配 GitHub PAT。
-AI服务需要支持 `messages` 请求及 `choices[0].message.content` 文本响应。使用HTTPS地址；不支持只有专有接口格式的服务。
+AI服务需要支持 `messages`、`max_tokens` 请求及 `choices[0].message.content` 文本响应，模型需能按提示输出JSON。使用HTTPS地址；不支持只有专有接口格式的服务。所有角色默认共用同一密钥，无需额外会议密钥。
 
 ## 4. 首次在 Mac 准备和上传 R2
 
@@ -130,12 +136,12 @@ R2 的结构：
 wuming-v2/
   HEAD.json                         当前有效状态指针
   databases/<SHA256>.sqlite.gz       按内容寻址的数据库压缩包
-  states/<唯一编号>.tar.gz           账本、计划、行情快照、扫描结果、报告
+  states/<唯一编号>.tar.gz           账本、计划、行情快照、报告、会议、记忆、提案
 ```
 
 每次先上传新文件，最后以 `If-Match` 原子更新指针。并行任务发生冲突时，较旧状态不能覆盖新状态。
 GitHub工作流也串行执行；不取消正在保存账本的任务。R2状态是权威账本，Actions缓存和Artifacts都不作为唯一账本。
-AI失败时财务状态已经提交：工作流会标红，21:37或手动重跑仅补复盘。成功的AI响应不会重复请求。
+AI失败时财务状态已经提交：工作流会标红，21:37或手动重跑从未完成的会议环节继续。已保存成功的AI响应复用；API响应后、保存前机器崩溃可能导致该环节重调。
 报告HTML/JSON包含当前持仓和选股，下载附件按私有研究资料处理。
 
 重新下载状态到一个**不存在或为空**的目录：
@@ -169,8 +175,10 @@ PYTHONPATH=cloud python -m pytest cloud/tests -q
 python -m ashare_cloud.cli run --local --state-dir .cloud-state-restored
 ```
 
-`--local` 不上传R2，不要把此结果和云端并行运行的结果混用。正常运行由GitHub Actions负责。
+`--local` 不上传R2，不要把此结果和云端并行运行的结果混用。正常运行由选定的服务器或GitHub Actions负责。
 `--skip-ai` 是显式检查模式，报告会注明没有AI复盘，不会伪装成功的模型响应。
+
+`review --date YYYY-MM-DD` 只对已有结算日生成或恢复会议，不重新采集行情、成交或建计划。R2模式仍使用空的恢复目录；服务器入口会为每次尝试建立新目录。
 
 ## 8. 目前的边界
 

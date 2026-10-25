@@ -29,16 +29,20 @@ def evidence(state, day, market):
                            "hash": p["hash"], "strategy": p["strategy_version"],
                            "gate_c": p["gate_c"]} if p else None),
             "market_coverage": market["coverage"], "auction_note": market["auction_note"],
-            "completed_trade_count": len(state["closed_trades"]),
+            "completed_trade_count": sum(t["sell_date"] <= day for t in state["closed_trades"]),
             "recent_settlements": [{"date": d, "equity": x["equity"], "day_pnl": x["day_pnl"]}
-                                   for d, x in sorted(state["settlements"].items())[-5:]],
+                                   for d, x in sorted(state["settlements"].items()) if d <= day][-5:],
             "limitations": ["没有提供新闻或公司公告，不得编造归因", "竞价成交仅模拟，无法还原真实排队",
                             "人工外围门槛在云端默认不通过", "股票池从原始项目导入，新上市股票需维护股票池"]}
 
 
 def ai_review(facts):
+    return chat_completion(SYSTEM, facts)
+
+
+def chat_completion(system, data, *, model=None, max_tokens=None):
     base = os.getenv("AI_BASE_URL", "").rstrip("/")
-    model = os.getenv("AI_MODEL", "")
+    model = model or os.getenv("AI_MODEL", "")
     key = os.getenv("AI_API_KEY", "")
     if not base or not model or not key:
         raise RuntimeError("缺少 AI_BASE_URL、AI_MODEL 或 AI_API_KEY")
@@ -46,8 +50,10 @@ def ai_review(facts):
         raise ValueError("AI_BASE_URL 必须是 HTTPS 地址，不能在 URL 中包含凭据")
     endpoint = base if base.endswith("/chat/completions") else base + "/chat/completions"
     # No vendor SDK dependency, no tool access, no secrets in the prompt.
-    payload = {"model": model, "messages": [{"role": "system", "content": SYSTEM},
-               {"role": "user", "content": json.dumps(facts, ensure_ascii=False, allow_nan=False)}]}
+    payload = {"model": model, "messages": [{"role": "system", "content": system},
+               {"role": "user", "content": json.dumps(data, ensure_ascii=False, allow_nan=False)}]}
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     for attempt in range(3):
         try:
             r = requests.post(endpoint, headers={"Authorization": f"Bearer {key}"},
@@ -95,6 +101,8 @@ def render(root, facts, review):
     else:
         lines.append("- 本次未创建下一交易日计划（历史补跑不得事后制定已开始交易日的计划）。")
     lines += ["", "## AI 复盘", "", review.get("content") or review.get("error", "AI 复盘待生成"),
+              *(["", "会议记录：meeting/days/；共享与角色记忆：meeting/memory/；研究提案：research/proposals.json。",
+                 "研究提案均待验证，不会修改交易规则或冻结计划。"] if review.get("kind") == "meeting" else []),
               "", "## 口径", "", "- 日内对照组合仅供归因，未扣费，不代表可执行 T+0 策略。",
               "- 人工外围条件默认未验证；两项开盘门槛通过时使用每只3500元档。",
               "- AI 不会修改冻结计划、成交或规则。"]

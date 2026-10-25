@@ -20,17 +20,17 @@ def test_ai_failure_keeps_financial_state_and_retry_only_reviews(tmp_path, monke
     monkeypatch.setattr(cli, "now", lambda: datetime(2026, 10, 19, 20, 37, tzinfo=SHANGHAI))
     monkeypatch.setattr(cli, "ai_review", lambda *a: (_ for _ in ()).throw(RuntimeError("mock AI failure")))
     with pytest.raises(RuntimeError, match="账本和失败状态已保存"):
-        cli.execute(root, "2026-10-19", cfg, cal)
+        cli.execute(root, "2026-10-19", cfg, cal, meeting_cfg={"enabled": False})
     saved = read_json(root / "account.json")
     assert saved["last_settled"] == "2026-10-19" and "2026-10-20" in saved["plans"]
     assert read_json(root / "reviews/2026-10-19.json")["status"] == "failed"
     monkeypatch.setattr(cli, "collect", lambda *a: pytest.fail("must not refetch on review retry"))
     monkeypatch.setattr(cli, "ai_review", lambda *a: {"status": "ok", "content": "测试用AI响应，不是真实模型调用。"})
-    cli.execute(root, "2026-10-19", cfg, cal)
+    cli.execute(root, "2026-10-19", cfg, cal, meeting_cfg={"enabled": False})
     assert read_json(root / "account.json") == saved
     assert read_json(root / "reviews/2026-10-19.json")["status"] == "ok"
     monkeypatch.setattr(cli, "ai_review", lambda *a: pytest.fail("must not call AI twice"))
-    cli.execute(root, "2026-10-19", cfg, cal)
+    cli.execute(root, "2026-10-19", cfg, cal, meeting_cfg={"enabled": False})
 
 
 def test_ai_request_no_secrets_in_evidence_and_no_redirects(monkeypatch):

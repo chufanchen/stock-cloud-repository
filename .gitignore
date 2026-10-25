@@ -6,6 +6,11 @@
 /股神巴菲特A股交易/
 /_共享依赖/
 .cloud-state*/
+.server-runs/
+.upgrade-backups/
+_site/
+site-preview/
+.pages-source/
 .cloud.env
 .env
 *.env

@@ -16,7 +16,7 @@ for p in (root / "cloud").rglob("*"):
         continue
     if "__pycache__" in p.parts:
         continue
-    if p.suffix in (".py", ".md", ".json", ".txt", ".lock"):
+    if p.suffix in (".py", ".md", ".json", ".txt", ".lock", ".service", ".timer", ".css", ".js"):
         allowed.append(p)
 allowed.append(root / "cloud/.env.example")
 for p in allowed:

@@ -12,6 +12,7 @@ from pathlib import Path
 from .common import Calendar, digest, file_hash, now, read_json, validate_config, write_json
 from .engine import build_plan, simulate, verify_plan
 from .market import collect, scan_database, seed_database
+from .meeting import DEFAULT_CONFIG as MEETING_CONFIG, MeetingError, run_meeting, validate_config as validate_meeting
 from .review import ai_review, evidence, render
 from .storage import Store
 
@@ -55,10 +56,12 @@ def initialize(root, legacy, cfg):
     print(f"初始化完成：{meta['stock_count']} 只，历史 {meta['seed_start']} 至 {meta['seed_end']}；现金 {state['cash']:.2f}")
 
 
-def execute(root, day, cfg, calendar, store=None, skip_ai=False):
+def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=None, review_only=False):
     root = Path(root)
     state = read_json(root / "account.json")
     check_account(state)
+    if review_only and day not in state["settlements"]:
+        raise ValueError("该日尚未结算，不能单独复盘；先运行 run")
     if not calendar.is_session(day):
         print(f"{day} 为休市日，跳过。")
         return
@@ -88,11 +91,19 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False):
             store.push(root)
         print(f"模拟结算已保存：总资产 {settlement['equity']:.2f}，当日 {settlement['day_pnl']:+.2f}")
     facts = evidence(state, day, market)
+    meeting_cfg = validate_meeting(meeting_cfg if meeting_cfg is not None else read_json(MEETING_CONFIG))
     error = None
-    if saved_review.exists() and read_json(saved_review).get("status") == "ok":
+    if skip_ai:
+        # Preserve successful output during a settlement-only run.
+        review = read_json(saved_review) if saved_review.exists() else {"status": "disabled", "content": "本次显式跳过 AI，仅展示程序计算结果。"}
+    elif meeting_cfg["enabled"]:
+        try:
+            review = run_meeting(root, facts, meeting_cfg, checkpoint=(lambda: store.push(root)) if store else None)
+        except MeetingError as exc:
+            error = str(exc)
+            review = {"status": "failed", "kind": "meeting", "error": error, "generated_at": now().isoformat()}
+    elif saved_review.exists() and read_json(saved_review).get("status") == "ok":
         review = read_json(saved_review)
-    elif skip_ai:
-        review = {"status": "disabled", "content": "本次显式跳过 AI，仅展示程序计算结果。"}
     else:
         try:
             review = ai_review(facts)
@@ -108,16 +119,18 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="A股每日模拟盘：GitHub Actions + R2")
-    parser.add_argument("command", choices=("init", "bootstrap", "run", "status", "restore"))
+    parser = argparse.ArgumentParser(description="A股每日模拟盘与研究会议：服务器 / GitHub Actions + R2")
+    parser.add_argument("command", choices=("init", "bootstrap", "run", "review", "status", "restore"))
     parser.add_argument("--state-dir", type=Path, default=Path(".cloud-state"))
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--meeting-config", type=Path, default=MEETING_CONFIG)
     parser.add_argument("--legacy-root", type=Path)
     parser.add_argument("--date", help="YYYY-MM-DD；历史补跑要求已有归档快照")
     parser.add_argument("--local", action="store_true", help="使用本地状态，不读写 R2")
     parser.add_argument("--skip-ai", action="store_true", help="仅用于检查，显式不生成 AI 复盘")
     args = parser.parse_args(argv)
     cfg = validate_config(read_json(args.config))
+    meeting_cfg = validate_meeting(read_json(args.meeting_config))
     root = args.state_dir
     if args.command == "init":
         if not args.legacy_root:
@@ -152,7 +165,7 @@ def main(argv=None):
         if not args.local:
             store = Store()
             store.pull(root)
-        execute(root, day, cfg, cal, store, args.skip_ai)
+        execute(root, day, cfg, cal, store, args.skip_ai, meeting_cfg, review_only=args.command == "review")
 
 
 if __name__ == "__main__":

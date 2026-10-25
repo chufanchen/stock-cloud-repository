@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wuming at 20:37 and retry at 21:37 Beijing time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 20,21:37:00 Asia/Shanghai
+AccuracySec=1min
+Persistent=false
+Unit=wuming-daily.service
+
+[Install]
+WantedBy=timers.target
