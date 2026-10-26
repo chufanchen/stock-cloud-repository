@@ -25,15 +25,9 @@ def test_quotes_parse_date_and_market_prefix(monkeypatch):
 
 
 def test_reject_adjusted_kline_fallback(monkeypatch):
-    class Response:
-        def raise_for_status(self):
-            pass
-        def json(self):
-            return {"data": {"sh600001": {"qfqday": [["2026-10-19", "1", "1", "1", "1", "1"]]}}}
-    monkeypatch.setattr(mod.requests, "get", lambda *a, **k: Response())
-    monkeypatch.setattr(mod.time, "sleep", lambda *a: None)
-    with pytest.raises(RuntimeError):
-        mod.Tencent().history("sh600001", 10)
+    from ashare_cloud.history import parse_rows
+    with pytest.raises(ValueError, match="adjusted_only"):
+        parse_rows({"data": {"sh600001": {"qfqday": [["2026-10-19", "1", "1", "1", "1", "1"]]}}}, "sh600001")
 
 
 def test_auction_date_and_units(monkeypatch):

@@ -70,7 +70,8 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
         market = read_json(root / "snapshots" / f"{day}.json")
         print(f"{day} 已结算；本次仅检查或补生成报告。")
     else:
-        market = collect(root, day, cfg, calendar)
+        market = collect(root, day, cfg, calendar,
+                         **({"checkpoint": lambda: store.push(root)} if store else {}))
         # Commit the exact-day market evidence first. A later engine failure remains recoverable.
         if store:
             store.push(root)

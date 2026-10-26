@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -71,4 +72,14 @@ def validate_config(c):
         raise ValueError("市场覆盖率门槛不得低于 90%")
     if not 0 < c["liquidity_max_ratio"] <= 0.05 or not 0 < c["max_chase_pct"] <= 7:
         raise ValueError("无效成交约束")
+    for key, default, lower, upper in (("fetch_workers", 2, 1, 8), ("history_attempts", 4, 1, 6),
+                                      ("history_budget_seconds", 2400, 1, 2400),
+                                      ("history_checkpoint_every", 500, 1, 1000),
+                                      ("history_failure_limit", 8, 1, 30)):
+        value = c.get(key, default)
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"无效抓取配置 {key}")
+    interval = c.get("history_min_interval", 0.35)
+    if type(interval) not in (int, float) or not math.isfinite(interval) or not 0.2 <= interval <= 5:
+        raise ValueError("history_min_interval 必须为 0.2 到 5 秒")
     return c

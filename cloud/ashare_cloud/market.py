@@ -4,7 +4,8 @@ import math
 import os
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import requests
 
 from .common import now, read_json, write_json
 from .engine import limit_price, validate_bar
+from .history import HistoryClient, HistoryFetchError, HistoryPaused
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
 SCHEMA = """
@@ -53,6 +55,9 @@ def seed_database(source, target, sessions=200):
 
 
 class Tencent:
+    def __init__(self, cfg=None):
+        self.history_client = HistoryClient(cfg)
+
     def quotes(self, symbols):
         out = {}
         for start in range(0, len(symbols), 40):
@@ -90,22 +95,147 @@ class Tencent:
         return out
 
     def history(self, symbol, count):
-        urls = ["https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get",
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"]
-        for attempt in range(3):
-            try:
-                r = requests.get(urls[attempt % 2], params={"param": f"{symbol},day,,,{count},"},
-                                 headers=HEADERS, timeout=20)
-                r.raise_for_status()
-                j = r.json()
-                # Never accept qfqday as a fallback: limit prices require unadjusted data.
-                rows = j.get("data", {}).get(symbol, {}).get("day", [])
-                if not rows:
-                    raise ValueError("empty")
-                return [(symbol[2:], x[0], *map(float, x[1:6])) for x in rows if len(x) >= 6]
-            except (requests.RequestException, ValueError, TypeError, KeyError):
-                time.sleep(attempt + 0.2)
-        raise RuntimeError(f"历史日线取数失败：{symbol}")
+        return self.history_client.history(symbol, count)
+
+
+def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, checkpoint=None):
+    """Save only market progress; the caller cannot settle until this returns complete."""
+    # Today's quote may already exist after a failed attempt. It cannot prove that
+    # the preceding sessions were fetched, so exclude it when detecting gaps.
+    latest = dict(con.execute("SELECT code,MAX(date) FROM day WHERE date<? GROUP BY code", (day,)))
+    pending_file = Path(root) / "history-pending.json"
+    carried = read_json(pending_file).get("since", {}) if pending_file.exists() else {}
+    # Preserve the original gap across trading days too: a newer quote is not a
+    # replacement for historical rows that a previous attempt failed to fetch.
+    for code, cutoff in carried.items():
+        latest[code] = min(latest.get(code, ""), cutoff or "")
+    stale = [s for s in stocks if s["code"] in bars and latest.get(s["code"], "") < previous]
+    started = last_checkpoint = time.monotonic()
+    failures, completed, succeeded_codes = [], set(), set()
+    successful = consecutive_failures = since_checkpoint = 0
+    stop_reason = None
+    client = getattr(provider, "history_client", None)
+    budget = cfg.get("history_budget_seconds", 2400)
+    print(f"历史补齐：待抓取 {len(stale)}/{len(stocks)}，并发 {cfg['fetch_workers']}，"
+          f"全局最小间隔 {cfg.get('history_min_interval', 0.35)} 秒", flush=True)
+
+    def pause(reason):
+        nonlocal stop_reason
+        stop_reason = stop_reason or reason
+        if client:
+            client.pacer.stop(stop_reason)
+
+    def save(complete=False):
+        nonlocal last_checkpoint, since_checkpoint
+        # Ensure the raw close always overrides historical endpoint intraday bars.
+        for code, b in bars.items():
+            con.execute("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)",
+                        (code, day, b["open"], b["close"], b["high"], b["low"], b["vol"]))
+            mkt, lp = board_limit(code, b["name"])
+            con.execute("UPDATE stock SET name=?,mkt=?,limit_pct=? WHERE code=?", (b["name"], mkt, lp, code))
+        con.commit()
+        eligible = con.execute("SELECT COUNT(*) FROM day WHERE date=?", (previous,)).fetchone()[0]
+        pending = [s["code"] for s in stale if s["code"] not in completed]
+        remaining = dict(carried)
+        for stock in stale:
+            code = stock["code"]
+            if code in succeeded_codes:
+                remaining.pop(code, None)
+            else:
+                remaining[code] = latest.get(code) or None
+        write_json(pending_file, {"updated_at": now().isoformat(), "since": remaining})
+        diagnostic = {"date": day, "previous_date": previous, "status": "complete" if complete else "partial",
+                      "updated_at": now().isoformat(), "requested": len(stale), "processed": len(completed),
+                      "successful": successful, "failed": len(failures), "pending": pending,
+                      "previous_rows": eligible, "universe": len(stocks),
+                      "previous_coverage": eligible / len(stocks), "required_coverage": cfg["minimum_market_coverage"],
+                      "failure_reasons": dict(Counter(f["reason"] for f in failures)), "failures": failures,
+                      "stop_reason": stop_reason, "elapsed_seconds": round(time.monotonic() - started, 1)}
+        partial.update(complete=complete, history_errors=[f["code"] for f in failures])
+        write_json(Path(root) / "snapshots" / f"{day}.json", partial)
+        write_json(Path(root) / "diagnostics" / f"history-{day}.json", diagnostic)
+        # Complete state is published by execute() before settlement. Intermediate
+        # saves use the same R2 CAS, retaining the original account and frozen plans.
+        if checkpoint and not complete:
+            checkpoint()
+            print(f"行情进度已保存到 R2：成功 {successful}，失败 {len(failures)}，待处理 {len(pending)}", flush=True)
+        last_checkpoint, since_checkpoint = time.monotonic(), 0
+        return diagnostic
+
+    iterator = iter(stale)
+    pool = ThreadPoolExecutor(max_workers=cfg["fetch_workers"])
+    tasks = {}
+
+    def submit():
+        if stop_reason:
+            return
+        stock = next(iterator, None)
+        if stock is not None:
+            last = latest.get(stock["code"])
+            gap = (date.fromisoformat(day) - date.fromisoformat(last)).days if last else 700
+            task = pool.submit(provider.history, stock["mkt"] + stock["code"], min(700, max(10, gap + 5)))
+            tasks[task] = stock
+
+    try:
+        for _ in range(cfg["fetch_workers"]):
+            submit()
+        while tasks:
+            if time.monotonic() - started >= budget:
+                pause("time_budget")
+            ready, _ = wait(tasks, timeout=1, return_when=FIRST_COMPLETED)
+            for task in ready:
+                stock = tasks.pop(task)
+                code = stock["code"]
+                try:
+                    rows = [x for x in task.result() if x[1] <= day]
+                    if not any(x[1] <= previous for x in rows):
+                        raise HistoryFetchError(stock["mkt"] + code, [{"attempt": 1, "reason": "no_historical_rows"}])
+                    con.executemany("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)", rows)
+                    if not any(x[1] == previous for x in rows):
+                        raise HistoryFetchError(stock["mkt"] + code, [{"attempt": 1, "reason": "missing_previous_session"}])
+                    successful += 1
+                    succeeded_codes.add(code)
+                    consecutive_failures = 0
+                    completed.add(code)
+                except HistoryPaused as exc:
+                    pause(exc.reason)
+                except HistoryFetchError as exc:
+                    failures.append({"code": code, "reason": exc.reason, "attempts": exc.failures})
+                    completed.add(code)
+                    consecutive_failures += 1
+                except RuntimeError:
+                    failures.append({"code": code, "reason": "history_error", "attempts": []})
+                    completed.add(code)
+                    consecutive_failures += 1
+                since_checkpoint += 1
+                if consecutive_failures >= cfg.get("history_failure_limit", 8):
+                    pause("consecutive_failures")
+                if len(completed) and len(completed) % 100 == 0:
+                    print(f"补齐缺失日线：已处理 {len(completed)}/{len(stale)}，成功 {successful}，失败 {len(failures)}", flush=True)
+            if since_checkpoint >= cfg.get("history_checkpoint_every", 500) or time.monotonic() - last_checkpoint >= 180:
+                save()
+            while not stop_reason and len(tasks) < cfg["fetch_workers"]:
+                old_count = len(tasks)
+                submit()
+                if len(tasks) == old_count:
+                    break
+        eligible = con.execute("SELECT COUNT(*) FROM day WHERE date=?", (previous,)).fetchone()[0]
+        good = (not stop_reason and eligible / len(stocks) >= cfg["minimum_market_coverage"]
+                and len(failures) / len(stocks) <= 1 - cfg["minimum_market_coverage"])
+        diagnostic = save(complete=good)
+        if not good:
+            reason = {"time_budget": "达到本次抓取时间预算", "consecutive_failures": "连续取数失败，已停止请求"}.get(stop_reason, "完整性门槛未通过")
+            raise ValueError(f"历史日线补齐不足：{reason}；上一交易日覆盖 {eligible}/{len(stocks)} "
+                             f"({diagnostic['previous_coverage']:.2%}，要求 {cfg['minimum_market_coverage']:.0%})，"
+                             f"本次失败 {len(failures)}，待处理 {len(diagnostic['pending'])}。"
+                             f"补齐进度已保存，账本未结算；详见 diagnostics/history-{day}.json")
+        return partial
+    finally:
+        # Bound the submission queue to workers, so a failure never leaves thousands
+        # of queued requests running while checkpoint/storage errors propagate.
+        if client:
+            client.pacer.stop("finished")
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def auction_amounts(day):
@@ -149,7 +279,7 @@ def auction_amounts(day):
             time.sleep(2 ** attempt)
 
 
-def collect(root, day, cfg, calendar, provider=None):
+def collect(root, day, cfg, calendar, provider=None, checkpoint=None):
     root = Path(root)
     cache = root / "snapshots" / f"{day}.json"
     if cache.exists():
@@ -158,7 +288,7 @@ def collect(root, day, cfg, calendar, provider=None):
             return saved
     if day != now().date().isoformat() or now().hour < 15:
         raise ValueError("实时接口仅用于当天收盘后；历史补跑必须有该日归档快照")
-    provider = provider or Tencent()
+    provider = provider or Tencent(cfg)
     con = sqlite3.connect(root / "market.db")
     con.row_factory = sqlite3.Row
     stocks = [dict(r) for r in con.execute("SELECT * FROM stock ORDER BY code")]
@@ -193,39 +323,10 @@ def collect(root, day, cfg, calendar, provider=None):
                "coverage": coverage, "missing_codes": rejected, "auction_note": auction_note,
                "complete": False}
     write_json(cache, partial)
-    latest = dict(con.execute("SELECT code,MAX(date) FROM day GROUP BY code"))
-    stale = [s for s in stocks if s["code"] in bars and latest.get(s["code"], "") < previous]
-    errors = []
-    with ThreadPoolExecutor(max_workers=cfg["fetch_workers"]) as pool:
-        tasks = {}
-        for s in stale:
-            last = latest.get(s["code"])
-            gap = (date.fromisoformat(day) - date.fromisoformat(last)).days if last else 700
-            tasks[pool.submit(provider.history, s["mkt"] + s["code"], min(700, max(10, gap + 5)))] = s
-        for n, task in enumerate(as_completed(tasks), 1):
-            s = tasks[task]
-            try:
-                rows = task.result()
-                rows = [x for x in rows if x[1] <= day]
-                con.executemany("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)", rows)
-            except RuntimeError:
-                errors.append(s["code"])
-            if n % 500 == 0:
-                print(f"补齐缺失日线：{n}/{len(tasks)}", flush=True)
-    # Today's exact unadjusted quotes are authoritative for the close and risk labels.
-    for code, b in bars.items():
-        con.execute("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)",
-                    (code, day, b["open"], b["close"], b["high"], b["low"], b["vol"]))
-        mkt, lp = board_limit(code, b["name"])
-        con.execute("UPDATE stock SET name=?,mkt=?,limit_pct=? WHERE code=?", (b["name"], mkt, lp, code))
-    con.commit()
-    eligible_prev = con.execute("SELECT COUNT(*) FROM day WHERE date=?", (previous,)).fetchone()[0]
-    con.close()
-    if eligible_prev / len(stocks) < cfg["minimum_market_coverage"] or len(errors) / len(stocks) > 1 - cfg["minimum_market_coverage"]:
-        raise ValueError("历史日线补齐不足，拒绝以不完整股票池选股")
-    partial.update(complete=True, history_errors=errors)
-    write_json(cache, partial)
-    return partial
+    try:
+        return backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, checkpoint)
+    finally:
+        con.close()
 
 
 def scan_database(db, day, cfg, calendar):
