@@ -8,14 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       trade_date:
-        description: '留空为北京时间今天；历史补跑必须已有该日归档行情（YYYY-MM-DD）'
+        description: 'run/review留空为今天；sync留空使用最新归档收盘快照（YYYY-MM-DD）'
         required: false
         type: string
       mode:
-        description: 'run=结算、选股与会议；review=仅补已有结算日的会议'
+        description: 'run=结算、选股与会议；review=仅补会议；sync=仅续补历史行情，可跨日运行'
         type: choice
         default: run
-        options: [run, review]
+        options: [run, review, sync]
 
 permissions:
   contents: read

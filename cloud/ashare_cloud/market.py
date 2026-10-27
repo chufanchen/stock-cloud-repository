@@ -132,7 +132,9 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
             con.execute("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)",
                         (code, day, b["open"], b["close"], b["high"], b["low"], b["vol"]))
             mkt, lp = board_limit(code, b["name"])
-            con.execute("UPDATE stock SET name=?,mkt=?,limit_pct=? WHERE code=?", (b["name"], mkt, lp, code))
+            con.execute("""UPDATE stock SET name=?,mkt=?,limit_pct=? WHERE code=?
+                        AND NOT EXISTS (SELECT 1 FROM day WHERE code=? AND date>?)""",
+                        (b["name"], mkt, lp, code, code, day))
         con.commit()
         eligible = con.execute("SELECT COUNT(*) FROM day WHERE date=?", (previous,)).fetchone()[0]
         pending = [s["code"] for s in stale if s["code"] not in completed]
@@ -151,6 +153,8 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
                       "previous_coverage": eligible / len(stocks), "required_coverage": cfg["minimum_market_coverage"],
                       "failure_reasons": dict(Counter(f["reason"] for f in failures)), "failures": failures,
                       "stop_reason": stop_reason, "elapsed_seconds": round(time.monotonic() - started, 1)}
+        if client:
+            diagnostic["network"] = client.statistics()
         partial.update(complete=complete, history_errors=[f["code"] for f in failures])
         write_json(Path(root) / "snapshots" / f"{day}.json", partial)
         write_json(Path(root) / "diagnostics" / f"history-{day}.json", diagnostic)
@@ -172,7 +176,10 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
         stock = next(iterator, None)
         if stock is not None:
             last = latest.get(stock["code"])
-            gap = (date.fromisoformat(day) - date.fromisoformat(last)).days if last else 700
+            # Historical endpoints return the most recent rows, not rows ending at
+            # the archived date. Include the elapsed days when resuming later.
+            request_day = max(date.fromisoformat(day), now().date())
+            gap = (request_day - date.fromisoformat(last)).days if last else 700
             task = pool.submit(provider.history, stock["mkt"] + stock["code"], min(700, max(10, gap + 5)))
             tasks[task] = stock
 
@@ -212,6 +219,10 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
                     pause("consecutive_failures")
                 if len(completed) and len(completed) % 100 == 0:
                     print(f"补齐缺失日线：已处理 {len(completed)}/{len(stale)}，成功 {successful}，失败 {len(failures)}", flush=True)
+                    if client:
+                        stats = client.statistics()
+                        print(f"历史网络统计：请求 {stats['requests']}，请求异常 {stats['attempt_errors']}，"
+                              f"重试恢复 {stats['recovered_symbols']} 只", flush=True)
             if since_checkpoint >= cfg.get("history_checkpoint_every", 500) or time.monotonic() - last_checkpoint >= 180:
                 save()
             while not stop_reason and len(tasks) < cfg["fetch_workers"]:
@@ -279,14 +290,17 @@ def auction_amounts(day):
             time.sleep(2 ** attempt)
 
 
-def collect(root, day, cfg, calendar, provider=None, checkpoint=None):
+def collect(root, day, cfg, calendar, provider=None, checkpoint=None, archive_only=False):
     root = Path(root)
     cache = root / "snapshots" / f"{day}.json"
-    if cache.exists():
-        saved = read_json(cache)
-        if saved.get("complete") and saved["date"] == day:
+    saved = read_json(cache) if cache.exists() else None
+    if saved:
+        if not archive_only and saved.get("complete") and saved["date"] == day:
             return saved
-    if day != now().date().isoformat() or now().hour < 15:
+    if archive_only:
+        if not saved or saved.get("date") != day or day > now().date().isoformat():
+            raise ValueError("历史补齐需要已经保存的该日收盘快照，不能用今天的报价替代")
+    elif day != now().date().isoformat() or now().hour < 15:
         raise ValueError("实时接口仅用于当天收盘后；历史补跑必须有该日归档快照")
     provider = provider or Tencent(cfg)
     con = sqlite3.connect(root / "market.db")
@@ -295,13 +309,17 @@ def collect(root, day, cfg, calendar, provider=None, checkpoint=None):
     if len(stocks) < cfg["minimum_universe_size"]:
         raise ValueError("股票池规模不足")
     previous = calendar.previous(day)
-    quotes = provider.quotes([s["mkt"] + s["code"] for s in stocks] + ["sh000001"])
+    if archive_only:
+        quotes = {s["mkt"] + s["code"]: saved.get("bars", {}).get(s["code"]) for s in stocks}
+        quotes["sh000001"] = saved.get("index")
+    else:
+        quotes = provider.quotes([s["mkt"] + s["code"] for s in stocks] + ["sh000001"])
     bars, rejected = {}, []
     for s in stocks:
         b = quotes.get(s["mkt"] + s["code"])
         try:
             validate_bar(b, day)
-            if b["timestamp"][8:12] < "1500":
+            if b["timestamp"][:8] != day.replace("-", "") or b["timestamp"][8:12] < "1500":
                 raise ValueError("尚未收盘")
             bars[s["code"]] = b
         except ValueError:
@@ -311,15 +329,15 @@ def collect(root, day, cfg, calendar, provider=None, checkpoint=None):
         raise ValueError(f"当日行情覆盖率 {coverage:.2%} 不足；可能停更或接口失败")
     index = quotes.get("sh000001")
     validate_bar(index, day)
-    if index["timestamp"][8:12] < "1500":
+    if index["timestamp"][:8] != day.replace("-", "") or index["timestamp"][8:12] < "1500":
         raise ValueError("上证指数尚未收盘")
-    auctions, auction_note = auction_amounts(day)
+    auctions, auction_note = ({}, saved.get("auction_note", "使用已归档竞价证据")) if archive_only else auction_amounts(day)
     for code, a in auctions.items():
         if code in bars and abs(a["price"] - bars[code]["open"]) <= 0.011:
             bars[code]["auction_amount"] = a["amount"]
             bars[code]["auction_source"] = a["source"]
     # Persist raw observations before historical requests, so interruptions retain evidence locally.
-    partial = {"date": day, "captured_at": now().isoformat(), "bars": bars, "index": index,
+    partial = {"date": day, "captured_at": saved["captured_at"] if archive_only else now().isoformat(), "bars": bars, "index": index,
                "coverage": coverage, "missing_codes": rejected, "auction_note": auction_note,
                "complete": False}
     write_json(cache, partial)

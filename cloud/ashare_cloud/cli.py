@@ -121,7 +121,7 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="A股每日模拟盘与研究会议：服务器 / GitHub Actions + R2")
-    parser.add_argument("command", choices=("init", "bootstrap", "run", "review", "status", "restore"))
+    parser.add_argument("command", choices=("init", "bootstrap", "run", "review", "sync", "status", "restore"))
     parser.add_argument("--state-dir", type=Path, default=Path(".cloud-state"))
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--meeting-config", type=Path, default=MEETING_CONFIG)
@@ -152,6 +152,32 @@ def main(argv=None):
         s = read_json(root / "account.json")
         check_account(s)
         print(json.dumps({k: s[k] for k in ("cash", "equity", "last_settled", "positions")}, ensure_ascii=False, indent=2))
+    elif args.command == "sync":
+        # Prepare history from an already archived close, even before today's close.
+        # This command never creates a settlement, a plan or a model request.
+        store = None
+        if not args.local:
+            store = Store()
+            store.pull(root)
+        candidates = sorted((root / "snapshots").glob("????-??-??.json"))
+        day = args.date or (candidates[-1].stem if candidates else None)
+        if not day:
+            raise ValueError("没有归档收盘快照；先在交易日收盘后运行 run")
+        from datetime import date
+        date.fromisoformat(day)
+        cal = Calendar()
+        if not cal.is_session(day):
+            raise ValueError("归档日期不是交易日")
+        before = file_hash(root / "account.json")
+        check_account(read_json(root / "account.json"))
+        print(f"仅补齐 {day} 归档所需历史行情；不结算、不生成交易计划、不调用 AI。", flush=True)
+        collect(root, day, cfg, cal, archive_only=True,
+                **({"checkpoint": lambda: store.push(root)} if store else {}))
+        if file_hash(root / "account.json") != before:
+            raise RuntimeError("历史补齐不应修改账户，停止发布")
+        if store:
+            store.push(root)
+        print("历史行情补齐完成，账户与交易计划未变化。")
     else:
         day = args.date or now().date().isoformat()
         from datetime import date

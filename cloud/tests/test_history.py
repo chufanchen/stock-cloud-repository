@@ -89,6 +89,37 @@ def test_retry_after_http_date_and_budget():
     assert clock.now() == 5
 
 
+def test_remember_healthy_endpoint_and_count_recovered_failures():
+    clock, hosts = Clock(), []
+    def get(url, **kwargs):
+        hosts.append(url)
+        if "proxy.finance.qq.com" in url:
+            return Response(403)
+        return Response(payload=payload())
+    client = HistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep), get=get)
+    for _ in range(3):
+        client.history("sh600001", 12)
+    assert len(hosts) == 4
+    assert sum("proxy.finance.qq.com" in url for url in hosts) == 1
+    stats = client.statistics()
+    assert stats["attempt_errors"] == stats["recovered_symbols"] == 1
+    assert stats["requests"] == 4
+    assert stats["hosts"]["proxy.finance.qq.com"]["errors"] == {"http_403": 1}
+    assert stats["hosts"]["web.ifzq.gtimg.cn"]["successes"] == 3
+
+
+def test_endpoint_latency_visible_even_without_errors():
+    clock = Clock()
+    def get(url, **kwargs):
+        clock.sleep(4)
+        return Response(payload=payload())
+    client = HistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep), get=get)
+    client.history("sh600001", 12)
+    stats = client.statistics()
+    assert stats["attempt_errors"] == 0
+    assert stats["hosts"]["proxy.finance.qq.com"]["seconds"] == 4
+
+
 @pytest.mark.parametrize("error,reason", [(requests.Timeout("secret-url"), "timeout"),
                                          (requests.ConnectionError("secret-url"), "connection_error")])
 def test_network_failure_bounded_and_sanitized(error, reason):
@@ -259,3 +290,58 @@ def test_workflow_uploads_failure_diagnostics():
     step = workflow["jobs"]["daily"]["steps"][-1]
     assert step["if"] == "always()"
     assert ".cloud-state/diagnostics/" in step["with"]["path"]
+
+
+def test_archive_sync_resumes_during_next_day_without_quotes_auction_or_future_data(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    with pytest.raises(ValueError):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, Provider(fail=["sh600003"]))
+    before = read_json(tmp_path / "snapshots/2026-10-26.json")
+    monkeypatch.setattr(market, "now", lambda: datetime(2026, 10, 27, 9, 30, tzinfo=SHANGHAI))
+    provider = Provider()
+    provider.quotes = lambda *a: pytest.fail("sync must not use current quotes")
+    original_history = provider.history
+    provider.history = lambda symbol, count: original_history(symbol, count) + [(symbol[2:], "2026-10-27", 999, 999, 999, 999, 100)]
+    monkeypatch.setattr(market, "auction_amounts", lambda *a: pytest.fail("sync must not fetch auctions"))
+    result = market.collect(tmp_path, "2026-10-26", cfg, cal, provider, archive_only=True)
+    assert provider.requested == ["sh600003", "sh600004"]
+    assert result["complete"] and result["bars"] == before["bars"]
+    assert result["captured_at"] == before["captured_at"]
+    con = sqlite3.connect(tmp_path / "market.db")
+    assert con.execute("SELECT COUNT(*) FROM day WHERE date>'2026-10-26'").fetchone()[0] == 0
+    con.close()
+    assert read_json(tmp_path / "account.json") == state
+
+
+def test_sync_cli_selects_latest_archive_and_leaves_account_untouched(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    with pytest.raises(ValueError):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, Provider(fail=["sh600003"]))
+    config_file = tmp_path / "test-config.json"
+    write_json(config_file, cfg)
+    monkeypatch.setattr(market, "now", lambda: datetime(2026, 10, 27, 9, 30, tzinfo=SHANGHAI))
+    monkeypatch.setattr(market, "Tencent", lambda *a: Provider())
+    monkeypatch.setattr(cli, "simulate", lambda *a: pytest.fail("sync must not settle"))
+    monkeypatch.setattr(cli, "run_meeting", lambda *a: pytest.fail("sync must not call AI"))
+    cli.main(["sync", "--local", "--state-dir", str(tmp_path), "--config", str(config_file)])
+    assert read_json(tmp_path / "account.json") == state
+    assert read_json(tmp_path / "snapshots/2026-10-26.json")["complete"]
+    assert not (tmp_path / "reports").exists()
+
+
+def test_archive_sync_requires_real_closed_snapshot(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    with pytest.raises(ValueError, match="收盘快照"):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, archive_only=True)
+    provider = Provider()
+    bars = provider.quotes(["sh600001", "sh600002", "sh600003", "sh600004", "sh000001"])
+    for bar in bars.values():
+        bar["timestamp"] = "20261026140000"
+    write_json(tmp_path / "snapshots/2026-10-26.json", {"date": "2026-10-26", "complete": False,
+               "captured_at": "2026-10-26T14:00:00+08:00", "index": bars.pop("sh000001"),
+               "bars": {key[2:]: value for key, value in bars.items()}})
+    with pytest.raises(ValueError, match="覆盖率"):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, provider, archive_only=True)
