@@ -15,12 +15,12 @@
   "minimum_market_coverage": 0.97,
   "minimum_universe_size": 3000,
   "fetch_workers": 2,
-  "history_min_interval": 0.35,
+  "history_min_interval": 1.0,
   "history_attempts": 4,
   "history_budget_seconds": 2400,
   "history_checkpoint_every": 500,
   "history_failure_limit": 8,
   "seed_sessions": 200,
   "ai_required": true,
-  "history_source": "eastmoney"
+  "history_source": "sina"
 }

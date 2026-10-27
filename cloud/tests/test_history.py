@@ -8,7 +8,7 @@ import requests
 
 from ashare_cloud import cli, market
 from ashare_cloud.common import SHANGHAI, read_json, validate_config, write_json
-from ashare_cloud.history import EastmoneyHistoryClient, HistoryClient, HistoryFetchError, HistoryPaused, Pacer, parse_rows, retry_after
+from ashare_cloud.history import SinaHistoryClient, EastmoneyHistoryClient, HistoryClient, HistoryFetchError, HistoryPaused, Pacer, parse_rows, retry_after
 from ashare_cloud.storage import Store
 from test_engine import cal, cfg, state
 from test_storage import FakeS3
@@ -488,3 +488,28 @@ def test_denial_checkpoints_pending_without_settlement(tmp_path, monkeypatch, cf
     assert diag["stop_reason"] == "provider_access_denied" and diag["remaining_gaps"] == 4
     assert diag["status"] == "partial"
     assert read_json(restored / "account.json") == state
+
+
+@pytest.mark.parametrize("symbol", ["sh688008", "sz000001", "bj920000"])
+def test_sina_daily_jsonp_and_share_conversion(symbol):
+    clock = Clock()
+    def get(url, **kwargs):
+        assert "quotes.sina.cn" in url
+        assert kwargs["params"] == {"symbol": symbol, "scale": "240", "ma": "no", "datalen": "10"}
+        response = Response()
+        response.text = '/* JSONP */=(' + json.dumps([{"day": "2026-10-27", "open": "10", "close": "11", "high": "11", "low": "9", "volume": "12345"}]) + ');'
+        return response
+    client = SinaHistoryClient(pacer=Pacer(1, 100, clock.now, clock.sleep), get=get)
+    assert client.history(symbol, 10) == [(symbol[2:], "2026-10-27", 10, 11, 11, 9, 123.45)]
+
+
+@pytest.mark.parametrize("body", ['=([{day:"2026-10-27"}]);', '=([]);doSomething();', '<html>denied</html>'])
+def test_sina_never_executes_jsonp_or_accepts_html(body):
+    response = Response();response.text = body
+    with pytest.raises(ValueError):
+        SinaHistoryClient().decode(response)
+
+
+def test_sina_rejects_intraday_rows():
+    with pytest.raises(ValueError):
+        SinaHistoryClient().parse([{"day": "2026-10-27 14:00:00", "open": 10, "close": 10, "high": 10, "low": 10, "volume": 100}], "sh600001")

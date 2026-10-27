@@ -79,8 +79,8 @@ def validate_config(c):
         value = c.get(key, default)
         if type(value) is not int or not lower <= value <= upper:
             raise ValueError(f"无效抓取配置 {key}")
-    if c.get("history_source", "eastmoney") not in {"eastmoney", "tencent"}:
-        raise ValueError("history_source 必须是 eastmoney 或 tencent")
+    if c.get("history_source", "sina") not in {"sina", "eastmoney", "tencent"}:
+        raise ValueError("history_source 必须是 sina、eastmoney 或 tencent")
     interval = c.get("history_min_interval", 0.35)
     if type(interval) not in (int, float) or not math.isfinite(interval) or not 0.2 <= interval <= 5:
         raise ValueError("history_min_interval 必须为 0.2 到 5 秒")

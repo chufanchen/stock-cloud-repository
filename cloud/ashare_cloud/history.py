@@ -1,6 +1,7 @@
 """Bounded, globally paced historical requests; diagnostics never contain response bodies."""
 from __future__ import annotations
 
+import json
 import math
 import random
 import threading
@@ -119,6 +120,9 @@ class HistoryClient:
     def parameters(self, symbol, count):
         return {"param": f"{symbol},day,,,{count},"}
 
+    def decode(self, response):
+        return response.json()
+
     def parse(self, payload, symbol):
         return parse_rows(payload, symbol)
 
@@ -210,7 +214,7 @@ class HistoryClient:
                         reason = f"http_{status}"
                     else:
                         try:
-                            payload = response.json()
+                            payload = self.decode(response)
                         except ValueError:
                             raise ValueError("invalid_json") from None
                         rows = self.parse(payload, symbol)
@@ -275,8 +279,41 @@ class EastmoneyHistoryClient(HistoryClient):
         return parse_rows({"data": {symbol: {"day": raw}}}, symbol)
 
 
+class SinaHistoryClient(HistoryClient):
+    """Sina 240-minute (one full A-share session) raw bars, JSONP transport.
+
+    The endpoint is used by AKShare stock_zh_a_minute; daily scale was verified
+    against archived OHLC on SH/SZ/BJ. Never execute the JSONP wrapper.
+    """
+    source = "sina"
+    urls = ("https://quotes.sina.cn/cn/api/jsonp_v2.php/=/CN_MarketDataService.getKLineData",)
+    headers = {}
+    verify_archive = True
+
+    def parameters(self, symbol, count):
+        return {"symbol": symbol, "scale": "240", "ma": "no", "datalen": str(count)}
+
+    def decode(self, response):
+        raw = response.text.strip()
+        if "=(" not in raw or not raw.endswith(");"):
+            raise ValueError("invalid_json")
+        return json.loads(raw.split("=(", 1)[1][:-2])
+
+    def parse(self, payload, symbol):
+        try:
+            if not isinstance(payload, list):
+                raise ValueError("invalid_rows")
+            # Sina returns shares; the database and quote feed use lots of 100.
+            raw = [[x["day"], x["open"], x["close"], x["high"], x["low"],
+                    float(x["volume"]) / 100] for x in payload]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("invalid_rows") from None
+        return parse_rows({"data": {symbol: {"day": raw}}}, symbol)
+
+
 def history_client(cfg=None):
-    source = (cfg or {}).get("history_source", "eastmoney")
-    if source not in {"eastmoney", "tencent"}:
-        raise ValueError("history_source 必须是 eastmoney 或 tencent")
-    return (EastmoneyHistoryClient if source == "eastmoney" else HistoryClient)(cfg)
+    source = (cfg or {}).get("history_source", "sina")
+    providers = {"sina": SinaHistoryClient, "eastmoney": EastmoneyHistoryClient, "tencent": HistoryClient}
+    if source not in providers:
+        raise ValueError("history_source 必须是 sina、eastmoney 或 tencent")
+    return providers[source](cfg)
