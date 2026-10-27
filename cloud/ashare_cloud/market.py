@@ -13,7 +13,7 @@ import requests
 
 from .common import now, read_json, write_json
 from .engine import limit_price, validate_bar
-from .history import HistoryClient, HistoryFetchError, HistoryPaused
+from .history import history_client, HistoryFetchError, HistoryPaused
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}
 SCHEMA = """
@@ -56,7 +56,7 @@ def seed_database(source, target, sessions=200):
 
 class Tencent:
     def __init__(self, cfg=None):
-        self.history_client = HistoryClient(cfg)
+        self.history_client = history_client(cfg)
 
     def quotes(self, symbols):
         out = {}
@@ -202,7 +202,17 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
                     rows = [x for x in task.result() if x[1] <= day]
                     if not any(x[1] <= previous for x in rows):
                         raise HistoryFetchError(stock["mkt"] + code, [{"attempt": 1, "reason": "no_historical_rows"}])
-                    con.executemany("INSERT OR REPLACE INTO day VALUES(?,?,?,?,?,?,?)", rows)
+                    if client and client.verify_archive:
+                        closing = next((x for x in rows if x[1] == day), None)
+                        quote = bars[code]
+                        if closing is None or any(x[0] != code for x in rows) or any(
+                                abs(closing[i + 2] - quote[key]) > 0.011
+                                for i, key in enumerate(("open", "close", "high", "low"))):
+                            raise HistoryFetchError(stock["mkt"] + code,
+                                [{"attempt": 1, "reason": "archive_price_mismatch"}])
+                    # Filling an independent source cannot rewrite existing history.
+                    operation = "IGNORE" if client and client.verify_archive else "REPLACE"
+                    con.executemany(f"INSERT OR {operation} INTO day VALUES(?,?,?,?,?,?,?)", rows)
                     if not any(x[1] == previous for x in rows):
                         raise HistoryFetchError(stock["mkt"] + code, [{"attempt": 1, "reason": "missing_previous_session"}])
                     successful += 1
@@ -243,7 +253,8 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
                 and len(failures) / len(stocks) <= 1 - cfg["minimum_market_coverage"])
         diagnostic = save(complete=good)
         if not good:
-            reason = {"time_budget": "达到本次抓取时间预算", "consecutive_failures": "连续取数失败，已停止请求"}.get(stop_reason, "完整性门槛未通过")
+            reason = {"time_budget": "达到本次抓取时间预算", "consecutive_failures": "连续取数失败，已停止请求",
+                      "provider_access_denied": "行情源拒绝访问（WAF/403），已停止该来源全部请求"}.get(stop_reason, "完整性门槛未通过")
             raise ValueError(f"历史日线补齐不足：{reason}；上一交易日有报价 {len(previous_codes)}/{len(stocks)} "
                              f"({diagnostic['previous_coverage']:.2%})，完整历史可用 {ready}/{len(stocks)} "
                              f"({diagnostic['history_coverage']:.2%}，要求 {cfg['minimum_market_coverage']:.0%})；"

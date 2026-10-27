@@ -6,7 +6,7 @@ import random
 import threading
 import time
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import requests
@@ -111,6 +111,17 @@ def parse_rows(payload, symbol):
 
 
 class HistoryClient:
+    source = "tencent"
+    urls = URLS
+    headers = HEADERS
+    verify_archive = False
+
+    def parameters(self, symbol, count):
+        return {"param": f"{symbol},day,,,{count},"}
+
+    def parse(self, payload, symbol):
+        return parse_rows(payload, symbol)
+
     def __init__(self, cfg=None, pacer=None, get=None):
         cfg = cfg or {}
         self.pacer = pacer or Pacer(cfg.get("history_min_interval", 0.35), cfg.get("history_budget_seconds", 2400))
@@ -118,28 +129,28 @@ class HistoryClient:
         self.local = threading.local()
         self.get = get
         self.lock = threading.Lock()
-        self.preferred = URLS[0]
-        self.health = {url: {"blocked_until": 0, "failures": 0} for url in URLS}
-        self.metrics = {url: {"requests": 0, "successes": 0, "errors": Counter(), "seconds": 0.0} for url in URLS}
+        self.preferred = self.urls[0]
+        self.health = {url: {"blocked_until": 0, "failures": 0} for url in self.urls}
+        self.metrics = {url: {"requests": 0, "successes": 0, "errors": Counter(), "seconds": 0.0} for url in self.urls}
         self.recovered = 0
 
     def statistics(self):
         with self.lock:
             hosts = {url.split('/')[2]: {**m, "errors": dict(m["errors"]), "seconds": round(m["seconds"], 2)}
                      for url, m in self.metrics.items()}
-            return {"requests": sum(m["requests"] for m in hosts.values()),
+            return {"source": self.source, "requests": sum(m["requests"] for m in hosts.values()),
                     "attempt_errors": sum(sum(m["errors"].values()) for m in hosts.values()),
                     "recovered_symbols": self.recovered, "hosts": hosts}
 
     def _endpoint(self, previous=None):
         with self.lock:
             current = self.pacer.clock()
-            ready = [url for url in URLS if self.health[url]["blocked_until"] <= current]
+            ready = [url for url in self.urls if self.health[url]["blocked_until"] <= current]
             if ready:
                 candidates = [url for url in ready if url != previous] or ready
                 url = self.preferred if self.preferred in candidates else candidates[0]
             else:
-                url = min(URLS, key=lambda u: self.health[u]["blocked_until"])
+                url = min(self.urls, key=lambda u: self.health[u]["blocked_until"])
             return url, self.health[url]["blocked_until"]
 
     def _record(self, url, elapsed, reason=None, after=0, recovered=False):
@@ -162,10 +173,10 @@ class HistoryClient:
                 # Retry-After and provider-wide rate-limit waits still win.
                 health["blocked_until"] = self.pacer.clock() + max(after, min(30, 5 * 2 ** min(health["failures"] - 1, 3)))
                 if self.preferred == url:
-                    self.preferred = next(other for other in URLS if other != url)
+                    self.preferred = next((other for other in self.urls if other != url), url)
             errors = sum(sum(m["errors"].values()) for m in self.metrics.values())
         if errors <= 5 or errors % 25 == 0:
-            print(f"历史接口重试：{url.split('/')[2]} {reason}，累计请求异常 {errors}（含后来重试成功的请求）", flush=True)
+            print(f"历史接口异常：{url.split('/')[2]} {reason}，累计请求异常 {errors}（含后来重试成功的请求）", flush=True)
 
     def _get(self, *args, **kwargs):
         if self.get:
@@ -183,9 +194,17 @@ class HistoryClient:
             started = self.pacer.clock()
             after = 0
             try:
-                with self._get(url, params={"param": f"{symbol},day,,,{count},"},
-                               headers=HEADERS, timeout=(5, 15), allow_redirects=False) as response:
+                with self._get(url, params=self.parameters(symbol, count),
+                               headers=self.headers, timeout=(5, 15), allow_redirects=False) as response:
                     status = response.status_code
+                    # A WAF page is an access denial, not a transient endpoint error.
+                    # Stop all workers; never rotate same-provider hosts to bypass it.
+                    body = getattr(response, "text", "")[:4096].lower()
+                    location = response.headers.get("Location", "").lower()
+                    if status == 403 or "waf.tencent.com" in body + location:
+                        self.pacer.stop("provider_access_denied")
+                        self._record(url, self.pacer.clock() - started, "access_denied")
+                        raise HistoryPaused("provider_access_denied")
                     if status != 200:
                         after = retry_after(response.headers.get("Retry-After"))
                         reason = f"http_{status}"
@@ -194,7 +213,7 @@ class HistoryClient:
                             payload = response.json()
                         except ValueError:
                             raise ValueError("invalid_json") from None
-                        rows = parse_rows(payload, symbol)
+                        rows = self.parse(payload, symbol)
                         self._record(url, self.pacer.clock() - started, recovered=bool(failures))
                         self.pacer.succeeded()
                         return rows
@@ -219,3 +238,45 @@ class HistoryClient:
             retry_at = self.pacer.clock() + (delay if not reason.startswith("http_") else 0)
             previous = url
         raise HistoryFetchError(symbol, failures)
+
+
+class EastmoneyHistoryClient(HistoryClient):
+    """Independent unadjusted daily source; AKShare stock_zh_a_hist protocol.
+
+    Reference: akshare/stock/quote/stock_hist_em.py. Volume is in lots, matching
+    the existing raw Tencent database. No automatic cross-provider fallback.
+    """
+    source = "eastmoney"
+    urls = ("https://push2his.eastmoney.com/api/qt/stock/kline/get",)
+    headers = {"User-Agent": "ashare-cloud/1.0"}
+    verify_archive = True
+
+    def parameters(self, symbol, count):
+        from .common import now
+        # count is a conservative calendar-day gap, not a trading-day count.
+        end = now().date()
+        return {"fields1": "f1,f2,f3,f4,f5,f6",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                "ut": "7eea3edcaed734bea9cbfc24409ed989", "klt": "101", "fqt": "0",
+                "secid": ("1." if symbol.startswith("sh") else "0.") + symbol[2:],
+                "beg": (end - timedelta(days=count)).strftime("%Y%m%d"),
+                "end": end.strftime("%Y%m%d")}
+
+    def parse(self, payload, symbol):
+        try:
+            data = payload.get("data") or {}
+            if payload.get("rc", 0) != 0:
+                raise ValueError("provider_error")
+            if data.get("code") != symbol[2:]:
+                raise ValueError("symbol_mismatch")
+            raw = [row.split(",")[:6] for row in data.get("klines", [])]
+        except (AttributeError, TypeError):
+            raise ValueError("invalid_rows") from None
+        return parse_rows({"data": {symbol: {"day": raw}}}, symbol)
+
+
+def history_client(cfg=None):
+    source = (cfg or {}).get("history_source", "eastmoney")
+    if source not in {"eastmoney", "tencent"}:
+        raise ValueError("history_source 必须是 eastmoney 或 tencent")
+    return (EastmoneyHistoryClient if source == "eastmoney" else HistoryClient)(cfg)

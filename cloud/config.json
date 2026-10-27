@@ -2,7 +2,7 @@
   "strategy_version": "v2.1-cloud1",
   "initial_cash": 100013.62,
   "lookback": 120,
-  "position_threshold": 0.10,
+  "position_threshold": 0.1,
   "per_pick": 5000,
   "reduced_per_pick": 3500,
   "max_chase_pct": 7.0,
@@ -10,7 +10,7 @@
   "index_open_min_pct": -3.0,
   "commission_rate": 0.00025,
   "commission_min": 5.0,
-  "transfer_rate": 0.00001,
+  "transfer_rate": 1e-05,
   "stamp_rate": 0.0005,
   "minimum_market_coverage": 0.97,
   "minimum_universe_size": 3000,
@@ -21,5 +21,6 @@
   "history_checkpoint_every": 500,
   "history_failure_limit": 8,
   "seed_sessions": 200,
-  "ai_required": true
+  "ai_required": true,
+  "history_source": "eastmoney"
 }

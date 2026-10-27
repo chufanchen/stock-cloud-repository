@@ -8,7 +8,7 @@ import requests
 
 from ashare_cloud import cli, market
 from ashare_cloud.common import SHANGHAI, read_json, validate_config, write_json
-from ashare_cloud.history import HistoryClient, HistoryFetchError, HistoryPaused, Pacer, parse_rows, retry_after
+from ashare_cloud.history import EastmoneyHistoryClient, HistoryClient, HistoryFetchError, HistoryPaused, Pacer, parse_rows, retry_after
 from ashare_cloud.storage import Store
 from test_engine import cal, cfg, state
 from test_storage import FakeS3
@@ -94,7 +94,7 @@ def test_remember_healthy_endpoint_and_count_recovered_failures():
     def get(url, **kwargs):
         hosts.append(url)
         if "proxy.finance.qq.com" in url:
-            return Response(403)
+            return Response(502)
         return Response(payload=payload())
     client = HistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep), get=get)
     for _ in range(3):
@@ -104,7 +104,7 @@ def test_remember_healthy_endpoint_and_count_recovered_failures():
     stats = client.statistics()
     assert stats["attempt_errors"] == stats["recovered_symbols"] == 1
     assert stats["requests"] == 4
-    assert stats["hosts"]["proxy.finance.qq.com"]["errors"] == {"http_403": 1}
+    assert stats["hosts"]["proxy.finance.qq.com"]["errors"] == {"http_502": 1}
     assert stats["hosts"]["web.ifzq.gtimg.cn"]["successes"] == 3
 
 
@@ -339,7 +339,7 @@ def test_successful_run_preserves_exact_quote_and_completeness_threshold(tmp_pat
 
 @pytest.mark.parametrize("key,value", [("fetch_workers", 0), ("history_attempts", 0),
                                       ("history_budget_seconds", 99999), ("history_min_interval", 0),
-                                      ("history_checkpoint_every", 0), ("history_failure_limit", True)])
+                                      ("history_checkpoint_every", 0), ("history_failure_limit", True), ("history_source", "unknown")])
 def test_invalid_fetch_settings(cfg, key, value):
     cfg[key] = value
     with pytest.raises(ValueError):
@@ -408,3 +408,83 @@ def test_archive_sync_requires_real_closed_snapshot(tmp_path, monkeypatch, cfg, 
                "bars": {key[2:]: value for key, value in bars.items()}})
     with pytest.raises(ValueError, match="覆盖率"):
         market.collect(tmp_path, "2026-10-26", cfg, cal, provider, archive_only=True)
+
+
+@pytest.mark.parametrize("status,body", [(403, "denied"), (501, '<script>location="https://waf.tencent.com/501page.html"</script>')])
+def test_access_denial_stops_all_hosts_and_later_symbols(status, body):
+    clock, calls = Clock(), []
+    def get(url, **kwargs):
+        calls.append(url)
+        response = Response(status)
+        response.text = body
+        return response
+    client = HistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep), get=get)
+    for symbol in ("sh600001", "sh600002"):
+        with pytest.raises(HistoryPaused, match="provider_access_denied"):
+            client.history(symbol, 10)
+    assert len(calls) == 1
+    assert client.statistics()["attempt_errors"] == 1
+
+
+@pytest.mark.parametrize("symbol,secid", [("sh688008", "1.688008"), ("sz000001", "0.000001"), ("bj920000", "0.920000")])
+def test_eastmoney_unadjusted_identity_dates_and_volume(symbol, secid):
+    clock = Clock()
+    def get(url, **kwargs):
+        assert "eastmoney.com" in url
+        assert kwargs["params"]["secid"] == secid
+        assert kwargs["params"]["fqt"] == "0"
+        return Response(payload={"data": {"code": symbol[2:], "klines": ["2026-10-23,10,11,11,9,100,100000"]}})
+    client = EastmoneyHistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep), get=get)
+    assert client.history(symbol, 12) == [(symbol[2:], "2026-10-23", 10, 11, 11, 9, 100)]
+    assert client.statistics()["source"] == "eastmoney"
+    with pytest.raises(ValueError, match="symbol_mismatch"):
+        client.parse({"data": {"code": "other", "klines": []}}, symbol)
+
+
+def test_independent_source_price_mismatch_does_not_clear_gap(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    provider = Provider()
+    provider.history_client = EastmoneyHistoryClient()
+    original = provider.history
+    provider.history = lambda symbol, count: [tuple([x[0], x[1]] + [9, 9, 9, 9, 100]) for x in original(symbol, count)]
+    with pytest.raises(ValueError, match="历史日线补齐不足"):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, provider)
+    diag = read_json(tmp_path / "diagnostics/history-2026-10-26.json")
+    assert diag["failure_reasons"] == {"archive_price_mismatch": 1}
+    assert diag["remaining_gaps"] == 4
+    con = sqlite3.connect(tmp_path / "market.db")
+    assert con.execute("SELECT COUNT(*) FROM day WHERE date='2026-10-23'").fetchone()[0] == 0
+    con.close()
+    assert read_json(tmp_path / "account.json") == state
+
+
+def test_independent_source_fills_only_gaps_and_retains_existing_bars(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    provider = Provider()
+    provider.history_client = EastmoneyHistoryClient()
+    original = provider.history
+    provider.history = lambda symbol, count: original(symbol, count) + [(symbol[2:], "2026-10-19", 9, 9, 9, 9, 90)]
+    snapshot = market.collect(tmp_path, "2026-10-26", cfg, cal, provider)
+    assert snapshot["complete"]
+    con = sqlite3.connect(tmp_path / "market.db")
+    assert {x[0] for x in con.execute("SELECT close FROM day WHERE date='2026-10-19'")} == {10}
+    con.close()
+
+
+def test_denial_checkpoints_pending_without_settlement(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    provider = Provider()
+    provider.history = lambda *a: (_ for _ in ()).throw(HistoryPaused("provider_access_denied"))
+    store = Store(FakeS3(), "bucket", "test")
+    store.push(tmp_path, bootstrap=True)
+    with pytest.raises(ValueError, match="行情源拒绝访问"):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, provider, lambda: store.push(tmp_path))
+    restored = tmp_path / "restored"
+    store.pull(restored)
+    diag = read_json(restored / "diagnostics/history-2026-10-26.json")
+    assert diag["stop_reason"] == "provider_access_denied" and diag["remaining_gaps"] == 4
+    assert diag["status"] == "partial"
+    assert read_json(restored / "account.json") == state
