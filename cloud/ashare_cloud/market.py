@@ -146,11 +146,15 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
             else:
                 remaining[code] = latest.get(code) or None
         write_json(pending_file, {"updated_at": now().isoformat(), "since": remaining})
+        previous_codes = {row[0] for row in con.execute("SELECT code FROM day WHERE date=?", (previous,))}
+        ready = len(previous_codes - remaining.keys())
         diagnostic = {"date": day, "previous_date": previous, "status": "complete" if complete else "partial",
                       "updated_at": now().isoformat(), "requested": len(stale), "processed": len(completed),
                       "successful": successful, "failed": len(failures), "pending": pending,
                       "previous_rows": eligible, "universe": len(stocks),
                       "previous_coverage": eligible / len(stocks), "required_coverage": cfg["minimum_market_coverage"],
+                      "history_ready_rows": ready, "history_coverage": ready / len(stocks),
+                      "remaining_gaps": len(remaining),
                       "failure_reasons": dict(Counter(f["reason"] for f in failures)), "failures": failures,
                       "stop_reason": stop_reason, "elapsed_seconds": round(time.monotonic() - started, 1)}
         if client:
@@ -162,7 +166,8 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
         # saves use the same R2 CAS, retaining the original account and frozen plans.
         if checkpoint and not complete:
             checkpoint()
-            print(f"行情进度已保存到 R2：成功 {successful}，失败 {len(failures)}，待处理 {len(pending)}", flush=True)
+            print(f"行情进度已保存到 R2：本次成功 {successful}，失败 {len(failures)}，待处理 {len(pending)}；"
+                  f"完整历史可用 {ready}/{len(stocks)} ({ready / len(stocks):.2%})，剩余缺口 {len(remaining)}", flush=True)
         last_checkpoint, since_checkpoint = time.monotonic(), 0
         return diagnostic
 
@@ -230,15 +235,19 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
                 submit()
                 if len(tasks) == old_count:
                     break
-        eligible = con.execute("SELECT COUNT(*) FROM day WHERE date=?", (previous,)).fetchone()[0]
-        good = (not stop_reason and eligible / len(stocks) >= cfg["minimum_market_coverage"]
+        previous_codes = {row[0] for row in con.execute("SELECT code FROM day WHERE date=?", (previous,))}
+        unresolved = (set(carried) | {s["code"] for s in stale}) - succeeded_codes
+        ready = len(previous_codes - unresolved)
+        all_processed = len(completed) == len(stale)
+        good = (all_processed and ready / len(stocks) >= cfg["minimum_market_coverage"]
                 and len(failures) / len(stocks) <= 1 - cfg["minimum_market_coverage"])
         diagnostic = save(complete=good)
         if not good:
             reason = {"time_budget": "达到本次抓取时间预算", "consecutive_failures": "连续取数失败，已停止请求"}.get(stop_reason, "完整性门槛未通过")
-            raise ValueError(f"历史日线补齐不足：{reason}；上一交易日覆盖 {eligible}/{len(stocks)} "
-                             f"({diagnostic['previous_coverage']:.2%}，要求 {cfg['minimum_market_coverage']:.0%})，"
-                             f"本次失败 {len(failures)}，待处理 {len(diagnostic['pending'])}。"
+            raise ValueError(f"历史日线补齐不足：{reason}；上一交易日有报价 {len(previous_codes)}/{len(stocks)} "
+                             f"({diagnostic['previous_coverage']:.2%})，完整历史可用 {ready}/{len(stocks)} "
+                             f"({diagnostic['history_coverage']:.2%}，要求 {cfg['minimum_market_coverage']:.0%})；"
+                             f"本次失败 {len(failures)}，待处理 {len(diagnostic['pending'])}，总剩余缺口 {len(unresolved)}。"
                              f"补齐进度已保存，账本未结算；详见 diagnostics/history-{day}.json")
         return partial
     finally:
@@ -355,7 +364,11 @@ def scan_database(db, day, cfg, calendar):
         JOIN day d ON d.code=s.code AND d.date=?
         JOIN day b ON b.code=s.code AND b.date=? ORDER BY s.code""", (day, previous)).fetchall()
     pool = []
+    pending_file = Path(db).parent / "history-pending.json"
+    unresolved = set(read_json(pending_file).get("since", {})) if pending_file.exists() else set()
     for r in rows:
+        if r["code"] in unresolved:
+            continue
         if "ST" in r["name"].upper() or "退" in r["name"]:
             continue
         if r["prev_close"] <= 0 or abs(r["close"] - limit_price(r["prev_close"], r["limit_pct"])) > 0.005:

@@ -157,7 +157,10 @@ class HistoryClient:
             # A bad stock response does not prove the whole host is unavailable.
             if reason.startswith("http_") or reason in {"timeout", "connection_error", "request_error", "invalid_json"}:
                 health["failures"] += 1
-                health["blocked_until"] = self.pacer.clock() + max(after, min(300, 15 * 2 ** min(health["failures"] - 1, 5)))
+                # A repeated 501 previously held both workers for five minutes
+                # per attempt. Keep transient host backoff bounded; explicit
+                # Retry-After and provider-wide rate-limit waits still win.
+                health["blocked_until"] = self.pacer.clock() + max(after, min(30, 5 * 2 ** min(health["failures"] - 1, 3)))
                 if self.preferred == url:
                     self.preferred = next(other for other in URLS if other != url)
             errors = sum(sum(m["errors"].values()) for m in self.metrics.values())
@@ -204,6 +207,10 @@ class HistoryClient:
             except ValueError as exc:
                 reason = str(exc)
             failures.append({"attempt": attempt + 1, "host": url.split("/")[2], "reason": reason})
+            if reason in {"http_501", "connection_error", "invalid_json"} and hasattr(self.local, "session"):
+                # Do not keep reusing a connection that produced a proxy/protocol error.
+                self.local.session.close()
+                del self.local.session
             self._record(url, self.pacer.clock() - started, reason, after)
             delay = min(120, (15 if reason in {"http_403", "http_429"} else 2) * 2 ** attempt)
             if reason in {"http_403", "http_429", "http_503"} or after:

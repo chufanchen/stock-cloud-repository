@@ -120,6 +120,37 @@ def test_endpoint_latency_visible_even_without_errors():
     assert stats["hosts"]["proxy.finance.qq.com"]["seconds"] == 4
 
 
+def test_repeated_501_cooldown_bounded_but_retry_after_respected():
+    from ashare_cloud.history import URLS
+    clock = Clock()
+    client = HistoryClient(pacer=Pacer(0.35, 2400, clock.now, clock.sleep))
+    for _ in range(10):
+        client._record(URLS[0], 0.1, "http_501")
+        delay = client.health[URLS[0]]["blocked_until"] - clock.now()
+        assert 0 < delay <= 30
+        clock.sleep(delay)
+    client._record(URLS[0], 0.1, "http_429", after=900)
+    assert client.health[URLS[0]]["blocked_until"] - clock.now() >= 900
+
+
+def test_501_discards_bad_persistent_connection(monkeypatch):
+    clock, sessions = Clock(), []
+    class Session:
+        closed = False
+        def __init__(self):
+            self.index = len(sessions)
+            sessions.append(self)
+        def get(self, *args, **kwargs):
+            return Response(501) if self.index == 0 else Response(payload=payload())
+        def close(self):
+            self.closed = True
+    monkeypatch.setattr(requests, "Session", Session)
+    client = HistoryClient(pacer=Pacer(0.35, 100, clock.now, clock.sleep))
+    client.history("sh600001", 12)
+    assert len(sessions) == 2 and sessions[0].closed
+    assert client.statistics()["recovered_symbols"] == 1
+
+
 @pytest.mark.parametrize("error,reason", [(requests.Timeout("secret-url"), "timeout"),
                                          (requests.ConnectionError("secret-url"), "connection_error")])
 def test_network_failure_bounded_and_sanitized(error, reason):
@@ -221,6 +252,38 @@ def test_gap_survives_new_day_quote(tmp_path, monkeypatch, cfg, cal, state):
     con = sqlite3.connect(tmp_path / "market.db")
     assert con.execute("SELECT COUNT(*) FROM day WHERE date='2026-10-23'").fetchone()[0] == 4
     con.close()
+
+
+def test_complete_previous_quotes_do_not_hide_older_gaps(tmp_path, monkeypatch, cfg, cal, state):
+    configure(monkeypatch, cfg)
+    seed(tmp_path, state)
+    con = sqlite3.connect(tmp_path / "market.db")
+    con.executemany("INSERT INTO day VALUES(?,?,?,?,?,?,?)", [
+        (f"60000{n}", "2026-10-23", 10, 10, 10, 10, 100) for n in range(1, 5)])
+    con.commit()
+    con.close()
+    write_json(tmp_path / "history-pending.json", {"since": {f"60000{n}": "2026-10-19" for n in range(1, 5)}})
+    with pytest.raises(ValueError, match="完整历史可用 2/4"):
+        market.collect(tmp_path, "2026-10-26", cfg, cal, Provider(fail=["sh600003"]))
+    diagnostic = read_json(tmp_path / "diagnostics/history-2026-10-26.json")
+    assert diagnostic["previous_coverage"] == 1
+    assert diagnostic["history_coverage"] == 0.5 and diagnostic["remaining_gaps"] == 2
+    assert read_json(tmp_path / "snapshots/2026-10-26.json")["complete"] is False
+
+
+def test_scanner_excludes_stocks_with_unresolved_history(tmp_path, cfg, cal, state):
+    seed(tmp_path, state)
+    con = sqlite3.connect(tmp_path / "market.db")
+    for i in range(125):
+        day = (datetime(2026, 1, 1) + timedelta(days=i)).date().isoformat()
+        con.execute("INSERT INTO day VALUES(?,?,?,?,?,?,?)", ("600001", day, 10, 10, 200, 9, 100))
+    con.execute("INSERT INTO day VALUES(?,?,?,?,?,?,?)", ("600001", "2026-10-23", 10, 10, 10, 10, 100))
+    con.execute("INSERT INTO day VALUES(?,?,?,?,?,?,?)", ("600001", "2026-10-26", 11, 11, 11, 11, 100))
+    con.commit()
+    con.close()
+    assert len(market.scan_database(tmp_path / "market.db", "2026-10-26", cfg, cal)["hits"]) == 1
+    write_json(tmp_path / "history-pending.json", {"since": {"600001": "2026-10-19"}})
+    assert market.scan_database(tmp_path / "market.db", "2026-10-26", cfg, cal)["pool"] == []
 
 
 def test_storage_failure_propagates_and_stops_new_requests(tmp_path, monkeypatch, cfg, cal, state):
