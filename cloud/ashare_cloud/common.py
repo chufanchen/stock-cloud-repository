@@ -81,6 +81,18 @@ def validate_config(c):
             raise ValueError(f"无效抓取配置 {key}")
     if c.get("history_source", "sina") not in {"sina", "eastmoney", "tencent"}:
         raise ValueError("history_source 必须是 sina、eastmoney 或 tencent")
+    for key, allowed in (("history_sources", {"tickflow", "sina", "eastmoney", "tencent"}),
+                         ("quote_sources", {"tickflow", "tencent"})):
+        if key in c:
+            value = c[key]
+            if (not isinstance(value, list) or not value or any(type(x) is not str or x not in allowed for x in value)
+                    or len(set(value)) != len(value)):
+                raise ValueError(f"{key} 必须为非空、不重复的受支持数据源列表")
+    for key, default, lower, upper in (("tickflow_batch_size", 50, 1, 100),
+                                      ("quote_budget_seconds", 600, 30, 900)):
+        value = c.get(key, default)
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"无效抓取配置 {key}")
     interval = c.get("history_min_interval", 0.35)
     if type(interval) not in (int, float) or not math.isfinite(interval) or not 0.2 <= interval <= 5:
         raise ValueError("history_min_interval 必须为 0.2 到 5 秒")

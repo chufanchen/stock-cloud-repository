@@ -1,0 +1,28 @@
+name: 行情数据源检查
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Asia/Shanghai
+      PYTHONPATH: cloud
+      TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
+      TICKFLOW_BASE_URL: ${{ vars.TICKFLOW_BASE_URL || 'https://api.tickflow.org' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: cloud/requirements.lock
+      - name: 安装依赖
+        run: python -m pip install -r cloud/requirements.lock
+      - name: 检查 TickFlow 日线、沪深北行情与上证指数
+        run: python -m ashare_cloud.source_check

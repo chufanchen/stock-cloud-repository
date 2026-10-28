@@ -22,5 +22,8 @@
   "history_failure_limit": 8,
   "seed_sessions": 200,
   "ai_required": true,
-  "history_source": "sina"
+  "history_sources": ["tickflow", "sina", "eastmoney"],
+  "quote_sources": ["tickflow", "tencent"],
+  "tickflow_batch_size": 50,
+  "quote_budget_seconds": 600
 }

@@ -43,6 +43,8 @@ jobs:
       AI_MODEL: ${{ vars.AI_MODEL || secrets.AI_MODEL }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
       TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+      TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
+      TICKFLOW_BASE_URL: ${{ vars.TICKFLOW_BASE_URL || 'https://api.tickflow.org' }}
       TRADE_DATE: ${{ inputs.trade_date }}
       RUN_MODE: ${{ inputs.mode || 'run' }}
     steps:

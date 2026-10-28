@@ -26,7 +26,7 @@ sudoedit /etc/wuming/cloud.env
 
 如果用户或配置文件已存在，跳过对应创建步骤；不要用模板覆盖已填写的密钥。服务以 `wuming` 普通用户运行，代码和虚拟环境需可读/可执行。不要把Python放在个人家目录内，服务模板限制了家目录访问。
 
-环境文件填写：`R2_ENDPOINT_URL`、`R2_BUCKET`、`R2_PREFIX`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`，以及可选的 `TUSHARE_TOKEN`。字段与Actions相同，无需新增会议专用密钥。文件使用 `KEY=value`，不加 `export`，也不要依赖 `$变量` 展开。
+环境文件填写：`R2_ENDPOINT_URL`、`R2_BUCKET`、`R2_PREFIX`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`，以及 TickFlow 首选源的 `TICKFLOW_API_KEY`（可选 `TICKFLOW_BASE_URL`）和可选的 `TUSHARE_TOKEN`。字段与Actions相同，无需新增会议专用密钥。文件使用 `KEY=value`，不加 `export`，也不要依赖 `$变量` 展开。
 
 ## 2. 先选定日常执行端
 

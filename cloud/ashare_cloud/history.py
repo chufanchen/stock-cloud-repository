@@ -312,6 +312,9 @@ class SinaHistoryClient(HistoryClient):
 
 
 def history_client(cfg=None):
+    if (cfg or {}).get("history_sources"):
+        from .sources import PriorityHistory
+        return PriorityHistory(cfg)
     source = (cfg or {}).get("history_source", "sina")
     providers = {"sina": SinaHistoryClient, "eastmoney": EastmoneyHistoryClient, "tencent": HistoryClient}
     if source not in providers:

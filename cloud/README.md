@@ -11,7 +11,7 @@
 
 - 工作流：`.github/workflows/daily.yml`，北京时间 **20:37、21:37**，周一至周五启动，再由 XSHG 交易日历判断休市。
 - 20:37 做首次处理；21:37 是失败补偿。完成的交易日不重复成交、不重复调用成功的 AI 复盘。
-- 行情：新浪不复权日线、腾讯收盘快照；只有缺历史的股票才补日线，日常直接追加当日快照。
+- 行情：TickFlow 优先，历史日线回退新浪/东方财富，收盘行情回退腾讯；只有缺历史的股票才补日线，日常追加当日快照。
 - 选股：收盘涨停、剔除 ST/退市、至少120条历史日线、120日价格区间位置 <10%。
 - 执行：事前冻结候选 → 次日按开盘条件模拟买入 → 下一交易日收盘平仓；涨停顺延一次；跌停无法卖出则继续持仓并估值。
 - 状态：云端独立账本承接原快照 **100,013.62元空仓现金**；原账本和历史计划不修改、不事后补交易。
@@ -43,6 +43,7 @@ GitHub 仓库 → **Settings → Secrets and variables → Actions**。
 | `R2_ACCESS_KEY_ID` | 必须 | R2 S3 Access Key ID |
 | `R2_SECRET_ACCESS_KEY` | 必须 | 与上面配套的 Secret Access Key |
 | `AI_API_KEY` | AI复盘必须 | 你的兼容模型服务 API Key |
+| `TICKFLOW_API_KEY` | 启用 TickFlow 首选源需要 | 有实时行情和日线权限的 API Key；未配置时跳过 TickFlow |
 | `TUSHARE_TOKEN` | 完整R0竞价成交判定需要 | 有 `stk_auction_o` 权限的 Tushare Token；普通Token不代表已有该接口权限 |
 
 不配置 Tushare 时，选股和 AI 报告仍能运行，但缺竞价额的候选不会成交。已配置却无权限/返回错误时，任务失败，避免错误结算。
@@ -57,6 +58,7 @@ GitHub 仓库 → **Settings → Secrets and variables → Actions**。
 | `R2_PREFIX` | `wuming-v2`，可省略；同一账户的所有任务必须一致 |
 | `AI_BASE_URL` | 服务商文档中的兼容接口基础地址，通常以 `/v1` 结尾；程序追加 `/chat/completions` |
 | `AI_MODEL` | 服务商提供的模型 ID，不能填聊天产品里的显示名或账号名 |
+| `TICKFLOW_BASE_URL` | 可省略，默认 `https://api.tickflow.org`；仅服务根地址，不加 `/v1` |
 | `DAILY_EXECUTOR` | 仅GitHub仓库变量；`server` 跳过Actions定时运行，保留手动补跑；省略/`github` 沿用Actions主运行 |
 
 R2 Token 应给指定桶 **Object Read & Write** 权限。Bucket 保持私有，不需要公开域名，也不需要 Cloudflare 全局 API Key。
@@ -146,18 +148,36 @@ AI失败时财务状态已经提交：工作流会标红，21:37或手动重跑�
 
 ### 历史行情补齐与断点恢复
 
-默认历史来源为新浪（`cloud/config.json` 中 `history_source: "sina"`），无需新增密钥。
-使用新浪240分钟尺度的一日一条原始K线，沪深北样本已对照归档收盘价核验。
-只接受纯日期日线，拒绝分时行；JSONP外壳仅提取JSON，不执行返回的脚本；成交量从股换算为手。
-收盘快照仍来自腾讯。独立历史来源只填补缺失日线，不覆盖已有历史，且必须与归档当天快照的开高低收价格一致。
-请求不使用复权参数；股票代码、日期及价格格式均验证，不会接受价格口径不一致的结果。
+优先级在 `cloud/config.json` 配置，列表从左到右尝试：
 
-默认2个线程，全局至少1秒的请求间隔，单只最多4次尝试。
-HTTP 429/503触发全局冷却和渐进降速；服务端 `Retry-After` 优先，超过剩余时间预算就保存进度退出。
-连接、超时等临时异常使用有上限的重试。HTTP 403或腾讯WAF页面明确表示拒绝访问时，立即停止该来源的全部请求并保存检查点。
-不会自动切换同一家服务的入口来继续访问已被拒绝的接口，也不会自动混用独立数据源。
-仍支持显式配置 `history_source: "eastmoney"` 或 `"tencent"`；当前部署已观察到东方财富连接失败、腾讯WAF拦截，保持新浪默认配置。
-接口依据：[新浪接口的AKShare实现](https://github.com/akfamily/akshare/blob/main/akshare/stock/quote/stock_zh_a_sina.py)、[东方财富接口实现](https://github.com/akfamily/akshare/blob/main/akshare/stock/quote/stock_hist_em.py)。
+```json
+"history_sources": ["tickflow", "sina", "eastmoney"],
+"quote_sources": ["tickflow", "tencent"],
+"tickflow_batch_size": 50,
+"quote_budget_seconds": 600
+```
+
+TickFlow 使用官方 REST API 和 `x-api-key` 请求头。未配置密钥时跳过该源；密钥仅从运行环境读取。
+日线走批量接口，每批默认50只，显式 `period=1d&adjust=none`，拒绝列长度不一致、重复日期或异常价格。
+A股成交量按官方示例为“手”，直接写入现有数据库；用成交额除以股数检查量额单位是否一致。
+实时行情按批获取，某只缺失、日期不符、尚未收盘或字段不合格时，只为缺失股票调用下一个来源。
+同一条行情的 OHLC 和成交量始终来自同一来源，不从不同来源拼接单根行情。
+
+历史回退至新浪时，使用240分钟尺度的一日一条原始K线，成交量从股换算为手；JSONP外壳只提取JSON，不执行脚本。
+全部独立历史来源只填缺失行，不覆盖已有历史；返回值必须包含上一交易日，且归档当天 OHLC 须与保存的收盘快照一致。
+这些检查失败也会触发下一来源，仍失败则保存缺口。完整历史97%门槛不降低。
+
+默认2个线程，所有历史来源共享至少1秒的请求间隔与同一40分钟预算。
+优先级模式每个来源每轮请求一次；临时网络故障回退独立来源，连续请求故障触发本轮停用。
+429 保留该来源的 `Retry-After` 冷却期，冷却期间跳过该来源；不会把它的冷却期转移给其它服务。
+401/403、腾讯WAF明确拒绝时，本轮停用该来源，不改IP或轮换同服务入口继续请求。
+TickFlow 的网络熔断按实际批量请求计数，单只股票缺数据不会停用整个来源。
+旧的单来源 `history_source` 仍兼容；若存在 `history_sources`，以后者为准。
+腾讯历史接口不在默认列表中，因为此前已返回WAF拒绝；腾讯收盘行情为独立的现有能力。
+
+`diagnostics/history-YYYY-MM-DD.json` 记录每只股票最终来源及回退原因，
+`diagnostics/quotes-YYYY-MM-DD.json` 记录快照来源计数、失效原因；单只快照也保留 `source` 字段。
+凭据、请求头和服务商原始错误响应不会写入诊断。详见 [TickFlow 配置与竞价替代方案](TICKFLOW.md)。
 
 每处理500只，或距离上次保存超过3分钟，会把已提交的行情数据库、未完成缺口和诊断同步到R2。
 连续8只取数失败，或用完40分钟抓取预算时，停止新增请求并保存剩余进度，给上传与复盘留出运行时间。

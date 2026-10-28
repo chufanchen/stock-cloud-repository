@@ -56,15 +56,29 @@ def seed_database(source, target, sessions=200):
 
 class Tencent:
     def __init__(self, cfg=None):
+        self.cfg = cfg or {}
         self.history_client = history_client(cfg)
+        self.quote_diagnostics = {}
 
     def quotes(self, symbols):
+        if self.cfg.get("quote_sources"):
+            from .sources import priority_quotes
+            # A 429/403 from quotes also applies to this account's history API.
+            tickflow = getattr(self.history_client, "clients", {}).get("tickflow")
+            result, self.quote_diagnostics = priority_quotes(symbols, self.cfg, self._quotes, tickflow=tickflow)
+            return result
+        return self._quotes(symbols)
+
+    def _quotes(self, symbols):
         out = {}
         for start in range(0, len(symbols), 40):
             batch = symbols[start:start + 40]
             for attempt in range(3):
                 try:
                     r = requests.get("https://qt.gtimg.cn/q=" + ",".join(batch), headers=HEADERS, timeout=20)
+                    if getattr(r, "status_code", 200) in (401, 403):
+                        from .tickflow import SourceError
+                        raise SourceError("access_denied", permanent=True)
                     r.raise_for_status()
                     for line in r.content.decode("gbk", "replace").split(";"):
                         if '="' not in line:
@@ -89,7 +103,7 @@ class Tencent:
                     if attempt == 2:
                         raise RuntimeError("腾讯行情批量请求失败；不提交不完整结算") from None
                     time.sleep(2 ** attempt)
-            if start % 400 == 0:
+            if not self.cfg.get("quote_sources") and start % 400 == 0:
                 print(f"行情快照：{min(start + 40, len(symbols))}/{len(symbols)}", flush=True)
             time.sleep(0.12)
         return out
@@ -171,6 +185,14 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
         last_checkpoint, since_checkpoint = time.monotonic(), 0
         return diagnostic
 
+    counts = {}
+    for stock in stale:
+        last = latest.get(stock["code"])
+        request_day = max(date.fromisoformat(day), now().date())
+        gap = (request_day - date.fromisoformat(last)).days if last else 700
+        counts[stock["mkt"] + stock["code"]] = min(700, max(10, gap + 5))
+    if client and hasattr(client, "prepare"):
+        client.prepare(list(counts.items()), bars, day, previous)
     iterator = iter(stale)
     pool = ThreadPoolExecutor(max_workers=cfg["fetch_workers"])
     tasks = {}
@@ -180,12 +202,8 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
             return
         stock = next(iterator, None)
         if stock is not None:
-            last = latest.get(stock["code"])
-            # Historical endpoints return the most recent rows, not rows ending at
-            # the archived date. Include the elapsed days when resuming later.
-            request_day = max(date.fromisoformat(day), now().date())
-            gap = (request_day - date.fromisoformat(last)).days if last else 700
-            task = pool.submit(provider.history, stock["mkt"] + stock["code"], min(700, max(10, gap + 5)))
+            symbol = stock["mkt"] + stock["code"]
+            task = pool.submit(provider.history, symbol, counts[symbol])
             tasks[task] = stock
 
     try:
@@ -334,6 +352,8 @@ def collect(root, day, cfg, calendar, provider=None, checkpoint=None, archive_on
         quotes["sh000001"] = saved.get("index")
     else:
         quotes = provider.quotes([s["mkt"] + s["code"] for s in stocks] + ["sh000001"])
+        if getattr(provider, "quote_diagnostics", None):
+            write_json(root / "diagnostics" / f"quotes-{day}.json", provider.quote_diagnostics)
     bars, rejected = {}, []
     for s in stocks:
         b = quotes.get(s["mkt"] + s["code"])
