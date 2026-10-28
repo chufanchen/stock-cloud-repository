@@ -31,8 +31,10 @@ TickFlow 连续3次真实网络请求失败会熔断到本轮结束，不会因�
 4. 样本检查通过后，在日常流程查看 `diagnostics/quotes-日期.json` 和 `history-日期.json`。
    `selected_counts` / `selected_sources` 表示实际使用的来源；回退可成功完成，不能只凭绿色任务断定 TickFlow 已生效。
 
-诊断失败示例：`missing_key` 表示工作流未取得Key；`http_401` 表示认证失败；`http_403` 表示无权限；
+诊断失败示例：`missing_key` 表示工作流未取得Key；`http_401` 表示认证失败；`http_403` 表示权限或访问被拒绝；
 `http_429` 表示限流；`connection_error` / `timeout` 表示连接问题。
+检查会输出失败阶段、接口路径、响应格式和固定的 `response_hint` 分类，以区分API权限提示与网页网关拦截。
+分类仅来自响应特征，不是已经证实的根因；不会输出原始错误文案、服务商返回的凭据或任意错误码。
 配置在 Secrets 页面修改，不要把 Key 放进仓库或日志。代码不追随携带密钥的重定向。
 
 本机在项目根目录 `.cloud.env` 加相同字段；服务器在 `/etc/wuming/cloud.env` 加相同字段。

@@ -11,10 +11,16 @@ from .tickflow import SourceError, TickFlow
 
 def main():
     symbols = ["sh600000", "sz000001", "bj920002"]
-    client = TickFlow(Pacer(interval=1, budget=120))
+    stage = "配置"
+    client = None
     try:
+        client = TickFlow(Pacer(interval=1, budget=120))
+        stage = "历史日线"
+        print("开始检查：历史日线 /v1/klines/batch", flush=True)
         client.prepare([(s, 10) for s in symbols])
         histories = {s: client.history(s, 10) for s in symbols}
+        stage = "实时行情"
+        print("开始检查：实时行情 /v1/quotes", flush=True)
         quotes = client.quotes(symbols + ["sh000001"])
         for symbol in symbols + ["sh000001"]:
             if symbol not in quotes:
@@ -38,7 +44,11 @@ def main():
                          ensure_ascii=False, indent=2))
         return 0
     except (SourceError, HistoryPaused) as exc:
-        print("数据源检查未通过：" + exc.reason)
+        print(f"数据源检查未通过：{stage} {exc.reason}")
+        print(json.dumps({"failed_stage": stage,
+                          "diagnostic": getattr(exc, "diagnostic", {}),
+                          "network": client.statistics() if client else {}}, ensure_ascii=False, indent=2))
+        print("response_hint 是响应特征分类，不是已证实的根因；未输出服务商原文、密钥或请求头。")
         return 1
     except ValueError:
         print("数据源检查未通过：配置或行情字段不合格")

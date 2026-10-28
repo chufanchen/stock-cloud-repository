@@ -20,9 +20,57 @@ from .history import parse_rows, retry_after
 
 
 class SourceError(RuntimeError):
-    def __init__(self, reason, cooldown=0, permanent=False):
+    def __init__(self, reason, cooldown=0, permanent=False, diagnostic=None):
         self.reason, self.cooldown, self.permanent = reason, cooldown, permanent
+        self.diagnostic = diagnostic or {}
         super().__init__(reason)
+
+
+def http_diagnostic(response, path):
+    """Classify error text locally, emitting ONLY fixed tags, never raw text/code.
+
+    A JSON payload may echo a key or URL. A regex 'sanitizer' or truncation is
+    insufficient, so even provider error codes are not copied to public logs.
+    """
+    body = getattr(response, "text", "")[:16384]
+    content_type = response.headers.get("Content-Type", "").lower()
+    values = []
+    try:
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("not an error object")
+        shape = "json"
+        for key in ("code", "message", "error", "detail", "details"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                values.append(value[:4096])
+            elif isinstance(value, dict):
+                values.extend(v[:4096] for k, v in value.items()
+                              if k in {"code", "message", "detail"} and isinstance(v, str))
+    except (ValueError, TypeError):
+        shape = "html" if "text/html" in content_type or "<html" in body.lower() or "<!doctype html" in body.lower() else "text"
+        values = [body]
+    text = " ".join(values).lower()
+    category = "unspecified_denial"
+    # Hints are not proof of the root cause. Missing patterns remain unspecified.
+    patterns = (
+        ("edge_challenge", ("cf-chl-", "cf-browser-verification", "challenge-platform", "cloudflare ray id")),
+        ("ip_restriction", ("ip whitelist", "ip allowlist", "ip not allowed", "ip address is not allowed", "ip白名单", "ip 白名单")),
+        ("credential_expired", ("key expired", "key has expired", "token expired", "密钥已过期")),
+        ("credential_invalid", ("invalid api key", "invalid_api_key", "api key is invalid", "invalid token", "无效的api key", "无效的 api key")),
+        ("subscription_inactive", ("subscription expired", "subscription is inactive", "subscription required", "no active subscription", "订阅已过期", "未开通", "未订阅")),
+        ("quota_or_balance", ("insufficient balance", "insufficient credits", "quota exceeded", "余额不足", "额度不足")),
+        ("permission_denied", ("permission denied", "no permission", "insufficient permission", "access denied", "无权限", "没有权限", "权限不足")),
+    )
+    for name, needles in patterns:
+        if any(needle in text for needle in needles):
+            category = name
+            break
+    if response.headers.get("cf-mitigated", "").lower() == "challenge":
+        category = "edge_challenge"
+    return {"http_status": int(response.status_code),
+            "endpoint": path if path in {"/v1/klines/batch", "/v1/quotes"} else "other",
+            "response_format": shape, "response_hint": category}
 
 
 def api_symbol(symbol):
@@ -100,13 +148,15 @@ class TickFlow:
         self.failures = 0
         self.lock = threading.RLock()
         self.groups, self.cache = {}, {}
+        self.last_failure = None
 
     def statistics(self):
         with self.lock:
             return {"source": self.source, "requests": self.metrics["requests"],
                     "attempt_errors": sum(self.metrics["errors"].values()), "recovered_symbols": 0,
                     "errors": dict(self.metrics["errors"]), "disabled": self.disabled,
-                    "requests_by_endpoint": dict(self.metrics["endpoints"])}
+                    "requests_by_endpoint": dict(self.metrics["endpoints"]),
+                    "last_failure": self.last_failure}
 
     def request(self, path, params):
         # Serialized requests make the breaker and Retry-After global to this source.
@@ -124,7 +174,7 @@ class TickFlow:
                     status = response.status_code
                     if status != 200:
                         raise SourceError(f"http_{status}", retry_after(response.headers.get("Retry-After")),
-                                          permanent=status in (401, 403))
+                                          permanent=status in (401, 403), diagnostic=http_diagnostic(response, path))
                     data = response.json()
                     if not isinstance(data, dict) or "data" not in data:
                         raise SourceError("invalid_payload")
@@ -141,6 +191,7 @@ class TickFlow:
                 self.metrics["successes"] += 1
                 return data["data"]
             self.metrics["errors"][error.reason] += 1
+            self.last_failure = error.diagnostic or {"endpoint": path, "response_hint": error.reason}
             self.failures += 1
             if error.permanent:
                 self.disabled = error.reason
