@@ -122,6 +122,8 @@ Documents 中的完整迁移包还保留 `大投机家利弗莫尔/`、`AI进化
 
 **无 Tushare 竞价权限时，可使用免Key腾讯早盘快照回退。** 新采集器参考原 `watch_auction.py`，在北京时间09:25:05至09:29:50保存同日、同一冻结计划的双样本，验证时间戳和量额关系后保守推定竞价额。早盘由本机或服务器采集到私有R2，晚间Actions读取；漏采不能补造。采集器代码及systemd模板已提供，尚未启用定时或验证真实早盘样本。详见 [竞价回退部署](cloud/AUCTION.md)。TickFlow普通行情仍不自动用作竞价证据。
 
+当前多角色复盘主要读取账户、候选和研究记忆。龙虎榜、财报、公告、行业资金流等尚未接入；原版 skill 中找到的方法、抽查结果与接入顺序见 [数据接口覆盖与 skill 审计](cloud/DATA_SOURCES.md)。
+
 ## 5. 部署准备：代码、Python 与配置
 
 ### 5.1 取得代码并安装依赖
@@ -422,6 +424,7 @@ python cloud/export_repository.py "$HOME/Documents/wuming-cloud-export"
 - [服务器部署与维护](cloud/SERVER.md)
 - [GitHub Pages发布与公开字段](cloud/PAGES.md)
 - [多角色会议、共享记忆和研究提案](cloud/MEETING.md)
+- [数据接口覆盖与原版 skill 参考](cloud/DATA_SOURCES.md)
 - [TickFlow优先级、检查与竞价限制](cloud/TICKFLOW.md)
 - [免Key腾讯竞价采样与回退部署](cloud/AUCTION.md)
 - [策略和行情配置](cloud/config.json)

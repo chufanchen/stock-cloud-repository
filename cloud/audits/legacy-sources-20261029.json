@@ -1,0 +1,347 @@
+{
+  "requested_trade_date": "2026-10-28",
+  "checked_at": "2026-10-29T14:24:16.287936+08:00",
+  "scope": "small read-only samples; no production integration or full coverage claim",
+  "checks": [
+    {
+      "name": "limit_up",
+      "host": "push2ex.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_data_present": true,
+      "rows": 72,
+      "total": 72,
+      "complete_count": true,
+      "sample_fields": [
+        "amount",
+        "c",
+        "fbt",
+        "fund",
+        "hs",
+        "hybk",
+        "lbc",
+        "lbt",
+        "ltsz",
+        "m",
+        "n",
+        "p",
+        "tshare",
+        "zbc",
+        "zdp",
+        "zttj"
+      ]
+    },
+    {
+      "name": "broken_limit_up",
+      "host": "push2ex.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_data_present": true,
+      "rows": 69,
+      "total": 69,
+      "complete_count": true,
+      "sample_fields": [
+        "amount",
+        "c",
+        "fbt",
+        "hs",
+        "hybk",
+        "ltsz",
+        "m",
+        "n",
+        "p",
+        "tshare",
+        "zbc",
+        "zdp",
+        "zf",
+        "zs",
+        "ztp",
+        "zttj"
+      ]
+    },
+    {
+      "name": "limit_down",
+      "host": "push2ex.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_data_present": true,
+      "rows": 5,
+      "total": 5,
+      "complete_count": true,
+      "sample_fields": [
+        "amount",
+        "c",
+        "days",
+        "fba",
+        "fund",
+        "hs",
+        "hybk",
+        "lbt",
+        "ltsz",
+        "m",
+        "n",
+        "oc",
+        "p",
+        "pe",
+        "tshare",
+        "zdp"
+      ]
+    },
+    {
+      "name": "dragon_tiger_daily",
+      "host": "datacenter-web.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_success": true,
+      "rows": 5,
+      "total": 78,
+      "pages": 16,
+      "returned_dates": [
+        "2026-10-28 00:00:00"
+      ],
+      "sample_fields": [
+        "ACCUM_AMOUNT",
+        "BILLBOARD_BUY_AMT",
+        "BILLBOARD_DEAL_AMT",
+        "BILLBOARD_NET_AMT",
+        "BILLBOARD_SELL_AMT",
+        "BUY_RATIO",
+        "BUY_SEAT",
+        "BUY_SEAT_NEW",
+        "CHANGE_RATE",
+        "CHANGE_TYPE",
+        "CLOSE_PRICE",
+        "D10_CLOSE_ADJCHRATE",
+        "D1_CLOSE_ADJCHRATE",
+        "D20_CLOSE_ADJCHRATE",
+        "D2_CLOSE_ADJCHRATE",
+        "D30_CLOSE_ADJCHRATE",
+        "D5_CLOSE_ADJCHRATE",
+        "DEAL_AMOUNT_RATIO",
+        "DEAL_NET_RATIO",
+        "EXPLAIN",
+        "EXPLANATION",
+        "FREE_MARKET_CAP",
+        "MARKET",
+        "NET_BS_AMT",
+        "SECUCODE",
+        "SECURITY_CODE",
+        "SECURITY_INNER_CODE",
+        "SECURITY_NAME_ABBR",
+        "SECURITY_TYPE_CODE",
+        "SELL_RATIO",
+        "SELL_SEAT",
+        "SELL_SEAT_NEW",
+        "SUM_BUY_AMT",
+        "SUM_SELL_AMT",
+        "TRADE_DATE",
+        "TRADE_ID",
+        "TRADE_MARKET",
+        "TRADE_MARKET_CODE",
+        "TURNOVERRATE"
+      ]
+    },
+    {
+      "name": "dragon_tiger_buy",
+      "host": "datacenter-web.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_success": true,
+      "rows": 5,
+      "total": 5,
+      "returned_dates": [
+        "2026-10-28 00:00:00"
+      ],
+      "reason_group_count": 1,
+      "sample_fields": [
+        "ACCUM_AMOUNT",
+        "ACCUM_VOLUME",
+        "BUY",
+        "CHANGE_RATE",
+        "CHANGE_TYPE",
+        "CLOSE_PRICE",
+        "EXPLANATION",
+        "NET",
+        "OPERATEDEPT_CODE",
+        "OPERATEDEPT_CODE_OLD",
+        "OPERATEDEPT_NAME",
+        "RISE_PROBABILITY_3DAY",
+        "SECUCODE",
+        "SECURITY_CODE",
+        "SELL",
+        "TOTAL_BUYER_SALESTIMES_3DAY",
+        "TOTAL_BUYRIO",
+        "TOTAL_SELLRIO",
+        "TRADE_DATE",
+        "TRADE_ID"
+      ]
+    },
+    {
+      "name": "dragon_tiger_sell",
+      "host": "datacenter-web.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "provider_success": true,
+      "rows": 5,
+      "total": 5,
+      "returned_dates": [
+        "2026-10-28 00:00:00"
+      ],
+      "reason_group_count": 1,
+      "sample_fields": [
+        "ACCUM_AMOUNT",
+        "ACCUM_VOLUME",
+        "BUY",
+        "CHANGE_RATE",
+        "CHANGE_TYPE",
+        "CLOSE_PRICE",
+        "EXPLANATION",
+        "NET",
+        "OPERATEDEPT_CODE",
+        "OPERATEDEPT_CODE_OLD",
+        "OPERATEDEPT_NAME",
+        "RISE_PROBABILITY_3DAY",
+        "SECUCODE",
+        "SECURITY_CODE",
+        "SELL",
+        "TOTAL_BUYER_SALESTIMES_3DAY",
+        "TOTAL_BUYRIO",
+        "TOTAL_SELLRIO",
+        "TRADE_DATE",
+        "TRADE_ID"
+      ]
+    },
+    {
+      "name": "sector_flows",
+      "host": "push2.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "rows": 5,
+      "total": 496,
+      "scope": "current snapshot, not historical 2026-10-28"
+    },
+    {
+      "name": "fast_news",
+      "host": "np-weblist.eastmoney.com",
+      "http_status": 200,
+      "status": "json_response",
+      "rows": 0,
+      "source_times": [],
+      "sample_fields": [],
+      "scope": "latest only; not company announcements"
+    },
+    {
+      "name": "theme_attribution",
+      "host": "zx.10jqka.com.cn",
+      "http_status": 200,
+      "status": "json_response",
+      "rows": 70,
+      "data_type": "list"
+    },
+    {
+      "name": "northbound_legacy",
+      "host": "data.hexin.cn",
+      "http_status": 200,
+      "status": "json_response",
+      "fields": [
+        "hgt",
+        "sgt",
+        "time"
+      ],
+      "point_count": 262,
+      "scope": "semantics/current publication rules unverified; not accepted as net inflow"
+    },
+    {
+      "name": "overseas_sina",
+      "host": "hq.sinajs.cn",
+      "http_status": 200,
+      "status": "http_ok",
+      "nonempty_symbols": [
+        "gb_dji",
+        "gb_ixic",
+        "hf_CHA50CFD",
+        "rt_hkHSI",
+        "hf_CL",
+        "hf_GC",
+        "hf_XAU"
+      ],
+      "empty_symbols": []
+    },
+    {
+      "name": "intraday_tencent",
+      "host": "web.ifzq.gtimg.cn",
+      "http_status": 200,
+      "status": "json_response",
+      "source_date": "20261029",
+      "rows": 207,
+      "scope": "reported date only, not opening auction evidence"
+    },
+    {
+      "name": "fast_news_exact_legacy_params",
+      "http_status": 200,
+      "top_fields": [
+        "code",
+        "data",
+        "message",
+        "req_trace"
+      ],
+      "numeric_code": null,
+      "data_type": "dict",
+      "data_shapes": {
+        "sortEnd": {
+          "type": "str",
+          "length": 16
+        },
+        "index": {
+          "type": "int",
+          "length": null
+        },
+        "total": {
+          "type": "int",
+          "length": null
+        },
+        "size": {
+          "type": "int",
+          "length": null
+        },
+        "fastNewsList": {
+          "type": "list",
+          "length": 3
+        }
+      },
+      "legacy_parsed_count": 3
+    }
+  ],
+  "reference_sources": [
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/SKILL.md",
+      "sha256": "126ad1b8b704ee2732b8ff84533fdd1f8cd39e0d6143ca4912978ee05918811f"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/mkt_snapshot.py",
+      "sha256": "2ba2f80dd731122414c7ff0c1b80dfc6d1f85538ab10d80c0ec85cbee5c17d4b"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/cand_lhb.py",
+      "sha256": "3eb96ccb0fa731265da3809d9021ecb6ee299e1f1f3491e2b235582b10e10ba3"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/cand_flow.py",
+      "sha256": "6ad36f94905c09ad25f80e24f253f75e9341d1e39b65144f8b38ee4bdaff5d0d"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/tagging.py",
+      "sha256": "991d07646e3cff1ab8a2b74f64c3b3856e6404a31f0bdb13e8804cb2c0e348b0"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/premarket_scan.py",
+      "sha256": "6a73e9d2ba0a4b37bfc9469f6ed8f9542decf8c283a917e0e089273f96373506"
+    },
+    {
+      "path": "AI进化初始版/skill-premarket-3pick-plan/scripts/settle.py",
+      "sha256": "93fe75320ae56db9f99614b0e8b05b755015a2595cb72b91041e37e2bd60afa1"
+    }
+  ],
+  "production_integration": false,
+  "method": "Small serial read-only public endpoint probes; metadata only; no account, R2 or model API access."
+}
