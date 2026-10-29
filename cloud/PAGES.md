@@ -1,6 +1,6 @@
 # GitHub Pages 静态复盘台
 
-架构：**服务器运行模拟盘和AI会议 → 保存到私有R2 → GitHub Actions只读构建网页 → GitHub Pages展示。** 网页发布不采集行情、不调用模型、不修改账本。
+架构：**服务器或GitHub Actions运行模拟盘和AI会议 → 保存到私有R2 → GitHub Actions只读构建网页 → GitHub Pages展示。** 网页发布不采集行情、不调用模型、不修改账本。完整部署步骤见 [项目README](../README.md)。
 
 ## 展示内容
 
@@ -19,10 +19,10 @@
 
 1. 仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
 2. 在 **Settings → Secrets and variables → Actions** 填写R2配置。既有Secrets可直接复用；普通配置放Variables或Secrets都支持。
-3. 设置仓库变量 `DAILY_EXECUTOR=server`，把交易任务留在服务器。此变量不影响网页发布。
+3. 根据每日计算端设置 `DAILY_EXECUTOR`：Actions用 `github`，服务器用 `server`。此变量不影响网页发布；使用服务器时需另行实际部署并启动timer。
 4. 手动运行 **Actions → 发布复盘网页 → Run workflow**。构建和部署完成后，环境 `github-pages` 会显示网站链接。
 
-GitHub私有仓库使用Pages需要相应账户套餐；普通Pages站点通常公开可访问，私有仓库不等于私有网站。不要为启用Pages而直接改为公开仓库，代码仓库可保持私有。参见 [官方Pages工作流说明](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) 和 [访问控制说明](https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/changing-the-visibility-of-your-github-pages-site)。
+当前仓库已采用公开代码与公开Pages部署，R2保持私有。如果迁移到私有仓库，需确认账户套餐支持Pages；私有代码仓库也不自动意味着网站私有。参见 [官方Pages工作流说明](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) 和 [访问控制说明](https://docs.github.com/en/enterprise-cloud@latest/pages/getting-started-with-github-pages/changing-the-visibility-of-your-github-pages-site)。
 
 ## 凭据
 
@@ -42,7 +42,7 @@ GitHub私有仓库使用Pages需要相应账户套餐；普通Pages站点通常�
 
 ## 更新时机
 
-- 交易日北京时间 **21:17、22:17、23:17** 各检查一次最新R2归档。
+- 周一至周五北京时间 **21:17、22:17、23:17** 各检查一次最新R2归档；网页工作流本身不按交易日历跳过节假日。
 - 手动运行发布工作流可立即更新。
 - 更新网页代码后自动构建；若用Actions运行原交易工作流，其结束后也会触发网页更新。
 - GitHub定时任务可能延迟，以上不是精确发布时间承诺。它读取当前有效R2快照，遇到网络或数据错误时让构建失败，旧网站保持原状。

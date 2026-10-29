@@ -4,13 +4,13 @@
 
 展示层由 [GitHub Pages](PAGES.md) 承担，GitHub在21:17、22:17、23:17读取最新结果发布网站；服务器无需部署网页服务，也无需向GitHub推送账本文件。
 
-这里提供Linux + systemd配置模板。尚未连接你的服务器，也未启用定时任务；服务器系统、网络和凭据需要在实际部署时核对。若服务器不适合访问行情或模型接口，也可以沿用Actions执行全部流程，两者使用同一套代码。
+这里提供Linux + systemd配置模板，需在实际服务器上安装并核对网络、凭据与运行结果。仅修改仓库变量不会部署服务器。也可以沿用Actions执行每日流程，两者使用同一套代码。
 
 ## 1. 准备代码和环境
 
-先在这台Mac按 `LOCAL_READY.md` 配置密钥，并完成一次R2初始化。已初始化的R2不要重建；新会议目录会自动加入现有状态。
+先按 [项目README](../README.md) 配置密钥，并确认R2已初始化。已有R2时直接恢复，不要重建；新会议目录会自动加入现有状态。
 
-从Mac导出干净代码目录，再传到服务器 `/opt/wuming`，或让服务器从你的私有仓库检出。不要复制Mac的 `.venv` 或原始五个席位的大数据库。
+从Mac导出干净代码目录，再传到服务器 `/opt/wuming`，或从当前代码仓库检出到该路径。不要复制Mac的 `.venv` 或原始五个席位的大数据库。
 
 服务器需要可执行的Python 3.14、网络访问R2/行情/模型服务。以下示例假设Python 3.14已安装在系统可用路径，且你有sudo权限：
 
@@ -20,7 +20,9 @@ sudo install -d -o wuming -g wuming -m 700 /var/lib/wuming
 sudo python3.14 -m venv /opt/wuming/.venv
 sudo /opt/wuming/.venv/bin/python -m pip install -r /opt/wuming/cloud/requirements.lock
 sudo install -d -m 700 /etc/wuming
-sudo install -m 600 /opt/wuming/cloud/.env.example /etc/wuming/cloud.env
+if ! sudo test -f /etc/wuming/cloud.env; then
+  sudo install -m 600 /opt/wuming/cloud/.env.example /etc/wuming/cloud.env
+fi
 sudoedit /etc/wuming/cloud.env
 ```
 

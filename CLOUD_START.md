@@ -1,18 +1,14 @@
-# 每日模拟盘与AI研究会议：服务器 / GitHub Actions + R2
+# 部署入口
 
-云端入口：[部署说明](cloud/README.md)。原始五个席位的资料保留在本机。
+完整指南见 [README.md](README.md)，包含代码结构、环境变量、R2初始化、GitHub Actions与服务器部署、Pages发布，以及补跑和故障排查。
 
-现在加入多角色会议、共享和角色记忆、待验证研究提案。默认四席独立分析、一席交叉审计，再由主持人汇总；全部通过原有通用模型接口运行。详见 [会议室说明](cloud/MEETING.md)。
+选择一个每日计算端：
 
-已有服务器时，推荐 [服务器主运行方案](cloud/SERVER.md)，GitHub用于代码和测试，Actions保留手动补跑；R2始终保存权威状态。配置 `DAILY_EXECUTOR=server` 可关闭Actions自动运行，未设置则保留原调度。
+| 方案 | 仓库变量 `DAILY_EXECUTOR` | 网页发布 |
+|---|---|---|
+| GitHub Actions执行每日流程 | `github`，或不设置 | GitHub Actions → GitHub Pages |
+| 服务器执行每日流程 | `server`，并实际启用服务器timer | GitHub Actions → GitHub Pages |
 
-**GitHub Pages展示复盘结果**：[静态网页部署说明](cloud/PAGES.md)。服务器负责计算，GitHub只读R2结果，发布总览、历史日报、AI会议与研究提案。
+两者共用私有R2状态和通用模型接口。已有R2账户无需再次执行 `init/bootstrap`；`server` 变量本身不会安装或启动服务器任务。
 
-云端版每天北京时间 **20:37** 更新行情、模拟结算、选择下个交易日候选并生成AI复盘；**21:37**再次运行作失败补偿。
-交易日历跳过节假日，同日重跑不重复记账。原规则的人工外围条件明确记为未通过，使用保守仓位档。
-
-需要配置 R2 访问密钥、通用 Chat Completions 兼容模型接口。完整竞价流动性判定可选接入有 `stk_auction_o` 权限的 Tushare Token；无该数据时不虚构成交。
-
-首次运行从原10/19空仓现金 **100,013.62元**建立独立云端账本。第一次收盘只建下一交易日计划，从第二个交易日开始按事前计划模拟执行。
-
-本目录没有接券商，不涉及真实资金。AI负责文字复盘和研究建议，不修改冻结交易规则。
+专题说明：[服务器](cloud/SERVER.md) · [Pages](cloud/PAGES.md) · [AI会议](cloud/MEETING.md) · [TickFlow](cloud/TICKFLOW.md)。
