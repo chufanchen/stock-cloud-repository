@@ -25,3 +25,6 @@ __pycache__/
 *.sqlite
 *.parquet
 *.pkl
+
+# 独立研究接口检查的本地证据
+.research-check*/

@@ -14,6 +14,7 @@ from .engine import build_plan, simulate, verify_plan
 from .market import collect, scan_database, seed_database
 from .meeting import DEFAULT_CONFIG as MEETING_CONFIG, MeetingError, run_meeting, validate_config as validate_meeting
 from .review import ai_review, evidence, render
+from .research_data import DEFAULT_CONFIG as RESEARCH_CONFIG, add_to_facts, collect_research
 from .storage import Store
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config.json"
@@ -99,6 +100,24 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
             store.push(root)
         print(f"模拟结算已保存：总资产 {settlement['equity']:.2f}，当日 {settlement['day_pnl']:+.2f}")
     facts = evidence(state, day, market)
+    # Existing meetings (including failed ones) keep their exact inputs across upgrades.
+    meeting_path = root / "meeting/days" / f"{day}.json"
+    report_path = root / "reports" / f"{day}.json"
+    frozen_facts = None
+    if meeting_path.exists():
+        frozen_facts = read_json(meeting_path)["input"]["facts"]
+    elif saved_review.exists() and read_json(saved_review).get("status") == "ok" and report_path.exists():
+        frozen_facts = read_json(report_path)["facts"]
+    if frozen_facts is not None:
+        if any(frozen_facts.get(k) != v for k, v in facts.items() if k != "limitations"):
+            raise ValueError("已归档复盘的账户或行情事实发生变化，停止复用")
+        facts = copy.deepcopy(frozen_facts)
+    elif not skip_ai:
+        research_cfg = read_json(RESEARCH_CONFIG)
+        research = collect_research(root, day, state, research_cfg)
+        facts = add_to_facts(facts, research, research_cfg["max_context_chars"])
+        if store:
+            store.push(root)
     meeting_cfg = validate_meeting(meeting_cfg if meeting_cfg is not None else read_json(MEETING_CONFIG))
     error = None
     if skip_ai:

@@ -115,6 +115,9 @@ def load_public_data(root, limit=365):
                   "positions": selected_rows(settlement.get("positions"), ("code", "name", "qty", "buy_price", "mark")),
                   "events": selected_rows(settlement.get("events"), ("code", "action", "reason")),
                   "limitations": string_list(facts.get("limitations"))}
+        research = facts.get("research_data") or {}
+        report["research_sources"] = selected_rows(list((research.get("datasets") or {}).values()),
+            ("label", "source", "status", "row_count", "complete", "fetched_at", "shown_rows", "sample_truncated"))
         plan = facts.get("next_plan")
         report["next_plan"] = ({"date": text(plan.get("trade_date"), 10),
                                "count": number(plan.get("candidate_count")), "paused": plan.get("buy_paused") is True,
@@ -235,6 +238,17 @@ def candidate_table(report):
     return notice + table(["代码", "名称", "120日区间位", "前收盘价"], rows)
 
 
+def research_sources_table(report):
+    rows = report.get("research_sources", [])
+    if not rows:
+        return ""
+    labels = {"ok": "已采集", "partial": "有限覆盖", "missing": "缺失", "not_applicable": "无相关股票"}
+    return '<section class="panel"><h2>研究数据来源</h2><p class="muted">用于盘后讨论；公告为索引，财报为摘要。条目数不代表完整覆盖。</p>' + table(
+        ["数据", "来源", "状态", "采集条目", "采集时间"],
+        [[r.get("label"), r.get("source") or "—", labels.get(r.get("status"), "未知"),
+          r.get("row_count") if type(r.get("row_count")) in (int, float) else "未知", r.get("fetched_at") or "—"] for r in rows]) + '</section>'
+
+
 def day_body(report, reports):
     r = report
     body = f'<div class="day-meta"><span>{r["date"]} · 收盘后</span>{badge(r["status"])}</div>' + cards(r)
@@ -246,6 +260,7 @@ def day_body(report, reports):
         [[label, p.get("name") or p.get("code"), p.get("qty", "—"), money(p.get("price")), p.get("reason", "按冻结计划执行")]
          for key, label in (("buys", "买入"), ("sells", "卖出"), ("rejects", "未买入")) for p in r[key]])
     body += f'<p class="muted">本日平仓交易的累计已实现损益：{money(r["realized_pnl"], True)} 元，与当日损益口径不同。</p></section>'
+    body += research_sources_table(r)
     body += '<section class="panel quiet"><h2>数据与口径</h2>' + prose("\n".join("- " + x for x in r["limitations"])) + '</section>'
     return body
 
@@ -261,7 +276,7 @@ def meeting_body(report, prefix=""):
             if stage[key]:
                 body += '<h3>' + label + '</h3>' + prose("\n".join("- " + x for x in stage[key]))
         body += '</div></article>'
-    return body
+    return body + research_sources_table(report)
 
 
 def build_site(root, output, source=None, demo=False):

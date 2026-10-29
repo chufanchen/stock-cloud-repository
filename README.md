@@ -46,6 +46,7 @@ flowchart LR
 ├── .gitignore                     排除密钥、账本、数据库和原始研究资料
 ├── .github/workflows/
 │   ├── daily.yml                  每日模拟结算、选股、AI会议；支持手动补跑
+│   ├── research-check.yml         公开研究接口检查，不读写账户/R2或调用AI
 │   ├── sources-check.yml          TickFlow 样本接口检查，不读写账户
 │   ├── pages.yml                  从 R2 读取报告并发布 Pages
 │   └── test.yml                   自动化测试
@@ -62,11 +63,14 @@ flowchart LR
     │   ├── source_check.py        TickFlow独立检查入口
     │   ├── engine.py              固定交易规则、模拟费用、账户和冻结计划
     │   ├── storage.py             R2状态包、数据库校验和条件写入
+    │   ├── research_data.py        研究资料采集、同日归档、摘要和独立检查
+    │   ├── research_sources.py     龙虎榜、行业、新闻、公告、财务等适配器
     │   ├── review.py              模型接口、事实摘要与日报生成
     │   ├── meeting.py             多角色会议、断点恢复、记忆与提案
     │   └── pages.py               只读生成公开静态网站
     ├── config.json                行情及模拟交易参数
     ├── meeting.json               角色职责、模型覆盖与输出额度
+    ├── research_data.json         研究来源、抓取预算和关注股票上限
     ├── meeting_seed.json          初始研究记忆及来源
     ├── .env.example               环境变量模板，不含真实密钥
     ├── requirements.lock          每日流程的固定依赖版本
@@ -122,7 +126,7 @@ Documents 中的完整迁移包还保留 `大投机家利弗莫尔/`、`AI进化
 
 **无 Tushare 竞价权限时，可使用免Key腾讯早盘快照回退。** 新采集器参考原 `watch_auction.py`，在北京时间09:25:05至09:29:50保存同日、同一冻结计划的双样本，验证时间戳和量额关系后保守推定竞价额。早盘由本机或服务器采集到私有R2，晚间Actions读取；漏采不能补造。采集器代码及systemd模板已提供，尚未启用定时或验证真实早盘样本。详见 [竞价回退部署](cloud/AUCTION.md)。TickFlow普通行情仍不自动用作竞价证据。
 
-当前多角色复盘主要读取账户、候选和研究记忆。龙虎榜、财报、公告、行业资金流等尚未接入；原版 skill 中找到的方法、抽查结果与接入顺序见 [数据接口覆盖与 skill 审计](cloud/DATA_SOURCES.md)。
+新会议会在结算保存后采集十类盘后研究数据，包括龙虎榜及席位、涨跌停池、行业资金流、题材、快讯、公司公告索引和财务三表摘要。无需新增密钥，缺失和有限覆盖显式展示；已有会议保留冻结输入，不用当前资料补造历史。配置、角色分工和接口检查见 [研究数据接入](cloud/RESEARCH_DATA.md)。
 
 ## 5. 部署准备：代码、Python 与配置
 
@@ -424,6 +428,7 @@ python cloud/export_repository.py "$HOME/Documents/wuming-cloud-export"
 - [服务器部署与维护](cloud/SERVER.md)
 - [GitHub Pages发布与公开字段](cloud/PAGES.md)
 - [多角色会议、共享记忆和研究提案](cloud/MEETING.md)
+- [盘后研究数据、配置与角色分工](cloud/RESEARCH_DATA.md)
 - [数据接口覆盖与原版 skill 参考](cloud/DATA_SOURCES.md)
 - [TickFlow优先级、检查与竞价限制](cloud/TICKFLOW.md)
 - [免Key腾讯竞价采样与回退部署](cloud/AUCTION.md)

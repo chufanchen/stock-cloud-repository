@@ -1,0 +1,108 @@
+{
+  "date": "2026-10-29",
+  "captured_at": "2026-10-29T15:10:48.176834+08:00",
+  "completed_at": "2026-10-29T15:11:11.631160+08:00",
+  "request_count": 19,
+  "provider_circuits": {},
+  "scope": "Two public sample stock codes; no account, R2 or model access. Metadata only. Current-day LHB unavailable at check time; no backfill into meeting inputs.",
+  "datasets": {
+    "limit_up": {
+      "source": "eastmoney",
+      "status": "ok",
+      "row_count": 39,
+      "total": 39,
+      "complete": true,
+      "reason": null
+    },
+    "broken_limit_up": {
+      "source": "eastmoney",
+      "status": "ok",
+      "row_count": 25,
+      "total": 25,
+      "complete": true,
+      "reason": null
+    },
+    "limit_down": {
+      "source": "eastmoney",
+      "status": "ok",
+      "row_count": 43,
+      "total": 43,
+      "complete": true,
+      "reason": null
+    },
+    "dragon_tiger": {
+      "source": null,
+      "status": "missing",
+      "row_count": null,
+      "total": null,
+      "complete": false,
+      "reason": "provider_no_result"
+    },
+    "dragon_tiger_seats": {
+      "source": null,
+      "status": "missing",
+      "row_count": null,
+      "total": null,
+      "complete": false,
+      "reason": "dragon_tiger_unavailable"
+    },
+    "sector_flow": {
+      "source": "eastmoney",
+      "status": "ok",
+      "row_count": 496,
+      "total": 496,
+      "complete": true,
+      "reason": null
+    },
+    "themes": {
+      "source": "ths",
+      "status": "ok",
+      "row_count": 39,
+      "total": 39,
+      "complete": true,
+      "reason": null
+    },
+    "news": {
+      "source": "eastmoney",
+      "status": "partial",
+      "row_count": 30,
+      "total": null,
+      "complete": false,
+      "reason": null
+    },
+    "announcements": {
+      "source": "eastmoney",
+      "status": "partial",
+      "row_count": 20,
+      "total": null,
+      "complete": false,
+      "reason": null
+    },
+    "financials": {
+      "source": "eastmoney",
+      "status": "partial",
+      "row_count": 12,
+      "total": null,
+      "complete": false,
+      "reason": null
+    }
+  },
+  "published_previous_day_lhb_adapter_check": {
+    "checked_at": "2026-10-29T15:12:09.532195+08:00",
+    "requested_date": "2026-10-28",
+    "purpose": "adapter validation only; not point-in-time evidence or historical meeting input",
+    "daily": {
+      "status": "ok",
+      "row_count": 78,
+      "total": 78,
+      "complete": true
+    },
+    "seats": {
+      "status": "ok",
+      "row_count": 10,
+      "complete": true,
+      "errors": {}
+    },
+    "future_fields_present": false
+  }
+}

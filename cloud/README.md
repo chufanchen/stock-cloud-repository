@@ -13,6 +13,7 @@
 | 只设置网页展示 | [PAGES.md](PAGES.md) |
 | 配置TickFlow或排查403 | [TICKFLOW.md](TICKFLOW.md) |
 | 了解AI如何共享记忆 | [MEETING.md](MEETING.md) |
+| 配置盘后研究数据与独立接口检查 | [RESEARCH_DATA.md](RESEARCH_DATA.md) |
 | 查询缺失接口与原版 skill 中的方法 | [DATA_SOURCES.md](DATA_SOURCES.md) |
 | 补跑、恢复或检查结果 | 根README第10—12节 |
 

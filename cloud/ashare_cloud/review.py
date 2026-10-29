@@ -100,6 +100,13 @@ def render(root, facts, review):
             lines.append("- 无候选，保持空仓或仅管理已有持仓。")
     else:
         lines.append("- 本次未创建下一交易日计划（历史补跑不得事后制定已开始交易日的计划）。")
+    if facts.get("research_data"):
+        lines += ["", "## 研究数据来源", "", "以下资料用于盘后讨论；条目数不等于完整覆盖。", ""]
+        labels = {"ok": "已采集", "partial": "有限覆盖", "missing": "缺失", "not_applicable": "无相关股票"}
+        for entry in facts["research_data"]["datasets"].values():
+            count = entry.get("row_count")
+            lines.append(f"- {entry['label']}：{labels.get(entry['status'], '未知')}；来源 {entry.get('source') or '无'}；{count if count is not None else '未知'}条。")
+        lines.append("- 公告为索引、财报为摘要；未读取的正文和未采集的项目不能推测补全。")
     lines += ["", "## AI 复盘", "", review.get("content") or review.get("error", "AI 复盘待生成"),
               *(["", "会议记录：meeting/days/；共享与角色记忆：meeting/memory/；研究提案：research/proposals.json。",
                  "研究提案均待验证，不会修改交易规则或冻结计划。"] if review.get("kind") == "meeting" else []),

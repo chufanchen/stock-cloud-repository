@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "budget_seconds": 240,
+  "max_requests": 100,
+  "request_interval": 1.2,
+  "max_symbols": 10,
+  "max_context_chars": 20000,
+  "sources": {
+    "limit_up": ["eastmoney", "archive"],
+    "broken_limit_up": ["eastmoney", "archive"],
+    "limit_down": ["eastmoney", "archive"],
+    "dragon_tiger": ["eastmoney", "archive"],
+    "dragon_tiger_seats": ["eastmoney", "archive"],
+    "sector_flow": ["eastmoney", "archive"],
+    "themes": ["ths", "archive"],
+    "news": ["eastmoney", "archive"],
+    "announcements": ["eastmoney", "archive"],
+    "financials": ["eastmoney", "archive"]
+  }
+}
