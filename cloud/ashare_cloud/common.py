@@ -82,7 +82,8 @@ def validate_config(c):
     if c.get("history_source", "sina") not in {"sina", "eastmoney", "tencent"}:
         raise ValueError("history_source 必须是 sina、eastmoney 或 tencent")
     for key, allowed in (("history_sources", {"tickflow", "sina", "eastmoney", "tencent"}),
-                         ("quote_sources", {"tickflow", "tencent"})):
+                         ("quote_sources", {"tickflow", "tencent"}),
+                         ("auction_sources", {"tushare", "tencent_snapshot"})):
         if key in c:
             value = c[key]
             if (not isinstance(value, list) or not value or any(type(x) is not str or x not in allowed for x in value)

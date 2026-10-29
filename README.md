@@ -55,6 +55,7 @@ flowchart LR
     │   ├── runner.py              服务器入口：进程锁、独立恢复目录、运行记录
     │   ├── common.py              配置校验、北京时间、交易日历、哈希与JSON工具
     │   ├── market.py              股票池、收盘快照、历史补齐、竞价与选股
+    │   ├── auction.py             免Key腾讯早盘快照、双样本校验与独立R2证据
     │   ├── history.py             历史日线适配器、限速、重试与时间预算
     │   ├── sources.py             按用途配置的来源优先级、回退与有效性检查
     │   ├── tickflow.py            TickFlow REST适配、批量请求与脱敏诊断
@@ -77,6 +78,7 @@ flowchart LR
     ├── SERVER.md                  服务器部署与维护补充
     ├── PAGES.md                   网页发布与公开内容说明
     ├── MEETING.md                 角色、记忆和研究提案机制
+    ├── AUCTION.md                 无Tushare权限时的早盘采样与回退部署
     └── TICKFLOW.md                数据源配置、诊断和竞价边界
 ```
 
@@ -100,7 +102,7 @@ Documents 中的完整迁移包还保留 `大投机家利弗莫尔/`、`AI进化
 |---|---|---|
 | 历史日线 | TickFlow → 新浪 → 东方财富 | TickFlow 显式请求 `adjust=none`；独立历史来源只补缺行，需与归档当天 OHLC 一致 |
 | 当日收盘行情 | TickFlow → 腾讯 | 按股票回退，校验当天日期及北京时间15:00后的时间戳 |
-| 开盘集合竞价额 | Tushare `stk_auction_o` | 需要该接口权限；缺可靠证据的候选不模拟买入 |
+| 开盘集合竞价额 | Tushare `stk_auction_o` → 腾讯早盘归档快照 | 前者需权限；后者需早盘现场采集并通过校验，口径为保守推定金额 |
 
 优先级在 [cloud/config.json](cloud/config.json) 中配置：
 
@@ -108,6 +110,7 @@ Documents 中的完整迁移包还保留 `大投机家利弗莫尔/`、`AI进化
 {
   "history_sources": ["tickflow", "sina", "eastmoney"],
   "quote_sources": ["tickflow", "tencent"],
+  "auction_sources": ["tushare", "tencent_snapshot"],
   "tickflow_batch_size": 50,
   "quote_budget_seconds": 600
 }
@@ -117,7 +120,7 @@ Documents 中的完整迁移包还保留 `大投机家利弗莫尔/`、`AI进化
 
 历史抓取默认2个线程、全局最小间隔1秒、40分钟预算；批量接口减少请求数量。中断前保存历史缺口和诊断，之后只继续未完成部分。401/403会停用被拒绝的来源，429遵守其冷却期。
 
-**TickFlow 接入尚不能替代竞价接口。** 当前公开接口未明确提供独立的开盘集合竞价成交额。服务器在09:25后采集未来竞价证据是后续方案，需先验证数据语义；当前没有启用该采集器。全天成交额或第一分钟成交额不能直接代替。详见 [竞价说明](cloud/TICKFLOW.md)。
+**无 Tushare 竞价权限时，可使用免Key腾讯早盘快照回退。** 新采集器参考原 `watch_auction.py`，在北京时间09:25:05至09:29:50保存同日、同一冻结计划的双样本，验证时间戳和量额关系后保守推定竞价额。早盘由本机或服务器采集到私有R2，晚间Actions读取；漏采不能补造。采集器代码及systemd模板已提供，尚未启用定时或验证真实早盘样本。详见 [竞价回退部署](cloud/AUCTION.md)。TickFlow普通行情仍不自动用作竞价证据。
 
 ## 5. 部署准备：代码、Python 与配置
 
@@ -176,7 +179,7 @@ GitHub 配置入口：仓库 **Settings → Secrets and variables → Actions**�
 | `R2_SECRET_ACCESS_KEY` | 配套的 R2 Secret Access Key | 每日流程必须 |
 | `AI_API_KEY` | 通用模型接口密钥 | AI复盘必须 |
 | `TICKFLOW_API_KEY` | TickFlow日线与实时行情 | 启用TickFlow需要；缺省走备用来源 |
-| `TUSHARE_TOKEN` | 精确开盘竞价数据 | 需要 `stk_auction_o` 权限；普通Token不代表已有权限 |
+| `TUSHARE_TOKEN` | 专用开盘竞价接口 | 可选；需要 `stk_auction_o` 权限。无权限可使用腾讯早盘采样回退 |
 | `R2_PAGES_ACCESS_KEY_ID` | 单独的R2只读Access Key | 可选，需与下一项同时配置 |
 | `R2_PAGES_SECRET_ACCESS_KEY` | 单独的R2只读Secret Key | 可选；未配置时网页任务复用每日流程凭据 |
 
@@ -365,6 +368,7 @@ meeting/days/YYYY-MM-DD.{json,md} 会议上下文、逐席结果和断点
 meeting/memory/YYYY-MM-DD.json    共享及角色记忆
 research/proposals.{json,md}      累计待验证研究提案
 diagnostics/                    行情来源、覆盖率与错误分类
+auctions/                       同日冻结计划对应的腾讯早盘原始双样本
 ```
 
 R2使用 `HEAD.json` 指向当前有效状态包及数据库版本，并通过哈希校验和条件写入防止旧任务覆盖新状态。账本以R2为准，Actions缓存、运行附件和Pages都不是唯一账本。
@@ -419,6 +423,7 @@ python cloud/export_repository.py "$HOME/Documents/wuming-cloud-export"
 - [GitHub Pages发布与公开字段](cloud/PAGES.md)
 - [多角色会议、共享记忆和研究提案](cloud/MEETING.md)
 - [TickFlow优先级、检查与竞价限制](cloud/TICKFLOW.md)
+- [免Key腾讯竞价采样与回退部署](cloud/AUCTION.md)
 - [策略和行情配置](cloud/config.json)
 - [模型角色配置](cloud/meeting.json)
 - [环境变量模板](cloud/.env.example)

@@ -97,3 +97,9 @@ sudo systemctl start wuming-daily.timer
 如果以后要把结算和AI研究分开调度，可先 `run --skip-ai` 保存结算，再 `review --date ...` 只做会议；两个任务按顺序执行并使用同一R2前缀。本次默认保持一个完整任务，部署更简单。
 
 当前未配置服务器故障推送：失败会记录在systemd状态、journal和 `run.json`。可接入你已有的服务器监控；没有代你发送任何通知或配置消息服务。
+
+## 5. 可选：只用服务器采集早盘竞价
+
+没有 Tushare 竞价权限时，可安装 `wuming-auction.service` / `wuming-auction.timer`，北京时间09:24:50启动腾讯免Key采样。证据单独存入R2，晚间自动读取。无需改变晚间执行端，`DAILY_EXECUTOR=github` 时仍可启用服务器竞价采集。
+
+详细安装命令、同日冻结计划要求、金额推定口径和首次早盘验证步骤见 [竞价采集与回退](AUCTION.md)。模板未自动部署；每个账户只启用一个采集端。

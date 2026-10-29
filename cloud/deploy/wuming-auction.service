@@ -1,0 +1,24 @@
+[Unit]
+Description=Capture Tencent opening auction evidence for frozen candidates
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=wuming
+Group=wuming
+WorkingDirectory=/opt/wuming
+EnvironmentFile=/etc/wuming/cloud.env
+Environment=PYTHONPATH=/opt/wuming/cloud
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/wuming/.venv/bin/python -m ashare_cloud.auction --output-dir /var/lib/wuming/auction
+StateDirectory=wuming
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=6min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wuming

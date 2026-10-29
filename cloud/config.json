@@ -24,6 +24,7 @@
   "ai_required": true,
   "history_sources": ["tickflow", "sina", "eastmoney"],
   "quote_sources": ["tickflow", "tencent"],
+  "auction_sources": ["tushare", "tencent_snapshot"],
   "tickflow_batch_size": 50,
   "quote_budget_seconds": 600
 }

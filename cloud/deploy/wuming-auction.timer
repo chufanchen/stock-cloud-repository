@@ -1,0 +1,12 @@
+[Unit]
+Description=Start opening evidence capture at 09:24:50 Beijing time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:24:50 Asia/Shanghai
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=wuming-auction.service
+
+[Install]
+WantedBy=timers.target

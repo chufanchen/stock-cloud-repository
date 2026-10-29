@@ -70,12 +70,19 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
         market = read_json(root / "snapshots" / f"{day}.json")
         print(f"{day} 已结算；本次仅检查或补生成报告。")
     else:
+        plan = state["plans"].get(day)
+        if store and plan and "tencent_snapshot" in cfg.get("auction_sources", ["tushare", "tencent_snapshot"]):
+            from .auction import restore_capture
+            try:
+                restore_capture(store, root, plan, day)
+            except Exception:
+                # Auction evidence is optional. Never replace it with current turnover.
+                print("竞价快照未能恢复；继续其他来源，无可靠证据的候选将拒绝买入。", flush=True)
         market = collect(root, day, cfg, calendar,
                          **({"checkpoint": lambda: store.push(root)} if store else {}))
         # Commit the exact-day market evidence first. A later engine failure remains recoverable.
         if store:
             store.push(root)
-        plan = state["plans"].get(day)
         if not plan and state["last_settled"]:
             raise ValueError("该交易日缺少盘前冻结计划，禁止盘后临时选股成交")
         new_state, settlement = simulate(state, plan, market, day, calendar)

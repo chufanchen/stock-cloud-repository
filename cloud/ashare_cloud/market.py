@@ -287,7 +287,7 @@ def backfill(root, con, stocks, bars, day, previous, cfg, provider, partial, che
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def auction_amounts(day):
+def tushare_auction_amounts(day):
     """Optional Tushare official post-close opening-auction endpoint (updates at 20:00).
 
     Do not substitute 09:30 first-minute turnover for auction turnover.
@@ -326,6 +326,43 @@ def auction_amounts(day):
             if attempt == 2:
                 raise RuntimeError("Tushare 集合竞价数据请求失败") from None
             time.sleep(2 ** attempt)
+
+
+def auction_amounts(day, root=None, cfg=None, bars=None):
+    """Optional sources: a failed/missing paid API cannot block snapshot fallback."""
+    from .auction import validate_capture
+    cfg = cfg or {}
+    order = cfg.get("auction_sources", ["tushare", "tencent_snapshot"])
+    rows, notes = {}, []
+    for source in order:
+        if source == "tushare":
+            try:
+                batch, note = tushare_auction_amounts(day)
+                notes.append(note)
+            except (RuntimeError, requests.RequestException, ValueError, KeyError, TypeError):
+                batch = {}
+                notes.append("Tushare竞价接口不可用，尝试下一来源")
+        else:
+            batch = {}
+            path = Path(root) / "auctions" / f"{day}.json" if root else None
+            if path and path.exists():
+                try:
+                    plan = read_json(Path(root) / "account.json")["plans"][day]
+                    batch, rejected = validate_capture(read_json(path), plan, day)
+                    notes.append(f"腾讯早盘双样本：{len(batch)}只通过，{len(rejected)}只拒绝；量额推定并保守取小")
+                except (ValueError, KeyError, TypeError, OSError):
+                    notes.append("腾讯早盘证据不合格或与冻结计划不符")
+            else:
+                notes.append("没有已归档的腾讯早盘竞价证据")
+        for code, value in batch.items():
+            if code in rows:
+                continue
+            if bars is not None and (code not in bars or abs(value["price"] - bars[code]["open"]) > 0.011):
+                notes.append(f"{source}成交价与收盘归档开盘价不符，拒绝该项")
+                continue
+            rows[code] = value
+    notes.append(f"可用竞价证据{len(rows)}只；无证据的候选无法判定R0，不模拟买入")
+    return rows, "；".join(dict.fromkeys(notes))
 
 
 def collect(root, day, cfg, calendar, provider=None, checkpoint=None, archive_only=False):
@@ -371,11 +408,12 @@ def collect(root, day, cfg, calendar, provider=None, checkpoint=None, archive_on
     validate_bar(index, day)
     if index["timestamp"][:8] != day.replace("-", "") or index["timestamp"][8:12] < "1500":
         raise ValueError("上证指数尚未收盘")
-    auctions, auction_note = ({}, saved.get("auction_note", "使用已归档竞价证据")) if archive_only else auction_amounts(day)
+    auctions, auction_note = ({}, saved.get("auction_note", "使用已归档竞价证据")) if archive_only else auction_amounts(day, root, cfg, bars)
     for code, a in auctions.items():
         if code in bars and abs(a["price"] - bars[code]["open"]) <= 0.011:
             bars[code]["auction_amount"] = a["amount"]
             bars[code]["auction_source"] = a["source"]
+            bars[code]["auction_inferred"] = a.get("inferred", False)
     # Persist raw observations before historical requests, so interruptions retain evidence locally.
     partial = {"date": day, "captured_at": saved["captured_at"] if archive_only else now().isoformat(), "bars": bars, "index": index,
                "coverage": coverage, "missing_codes": rejected, "auction_note": auction_note,
