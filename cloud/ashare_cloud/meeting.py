@@ -50,7 +50,7 @@ def validate_config(config):
         raise ValueError("会议配置 enabled 必须为布尔值")
     if not c["enabled"]:
         return c
-    for name, low, high in (("max_tokens", 256, 6000), ("summary_max_tokens", 256, 8000),
+    for name, low, high in (("max_tokens", 256, 16000), ("summary_max_tokens", 256, 20000),
                             ("proposal_context_limit", 1, 50)):
         if type(c.get(name)) is not int or not low <= c[name] <= high:
             raise ValueError("会议配置超出允许范围：" + name)
@@ -68,6 +68,8 @@ def validate_config(config):
                 raise ValueError("会议角色缺少名称或职责")
         if role.get("stage") not in ("analysis", "audit") or not isinstance(role.get("model", ""), str):
             raise ValueError("会议角色阶段或模型配置无效")
+        if "max_tokens" in role and (type(role["max_tokens"]) is not int or not 256 <= role["max_tokens"] <= 16000):
+            raise ValueError("会议角色输出额度超出允许范围")
     if roles[-1]["stage"] != "audit" or any(r["stage"] != "analysis" for r in roles[:-1]):
         raise ValueError("最后一席必须为审计，前面的席位必须独立分析")
     if not isinstance(c.get("moderator_model", ""), str):
@@ -250,7 +252,7 @@ def run_meeting(root, facts, config=None, checkpoint=None):
         failed = False
         try:
             result = chat_completion(COMMON + instruction, data, model=role.get("model"),
-                                     max_tokens=settings["summary_max_tokens"] if rid == "moderator" else settings["max_tokens"])
+                                     max_tokens=settings["summary_max_tokens"] if rid == "moderator" else role.get("max_tokens", settings["max_tokens"]))
             parsed = parse_response(result["content"], rid, known_ids)
             m["stages"][rid] = {"status": "ok", "data": parsed,
                                 **{k: result.get(k) for k in ("model", "usage", "generated_at")}}

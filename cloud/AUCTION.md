@@ -1,3 +1,7 @@
+# 当前部署提示
+
+日常采集已统一通过 `runner --command auction --cloud`，读取固定本地状态并使用同一进程锁。下方直接 R2 采集方式仅作旧版本兼容。Mac 自动调度与 Linux 模板以 [SERVER.md](SERVER.md) 为准。
+
 # 没有 Tushare 竞价权限：腾讯早盘快照回退
 
 参考原始 `AI进化初始版/skill-premarket-3pick-plan/scripts/watch_auction.py`，新增 `ashare_cloud.auction`。原脚本保持不变。腾讯公开行情不需要 API Key，仍需联网访问，服务可用性及字段语义不受本项目保证。

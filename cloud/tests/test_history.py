@@ -346,13 +346,11 @@ def test_invalid_fetch_settings(cfg, key, value):
         validate_config(cfg)
 
 
-def test_workflow_uploads_failure_diagnostics():
+def test_actions_no_longer_fetches_history_or_uploads_private_artifacts():
     from pathlib import Path
-    import yaml
-    workflow = yaml.safe_load((Path(__file__).parents[2] / ".github/workflows/daily.yml").read_text())
-    step = workflow["jobs"]["daily"]["steps"][-1]
-    assert step["if"] == "always()"
-    assert ".cloud-state/diagnostics/" in step["with"]["path"]
+    text = (Path(__file__).parents[2] / ".github/workflows/daily.yml").read_text()
+    assert 'schedule:' not in text and 'upload-artifact' not in text
+    assert 'AI_API_KEY' not in text and 'R2_SECRET_ACCESS_KEY' not in text
 
 
 def test_archive_sync_resumes_during_next_day_without_quotes_auction_or_future_data(tmp_path, monkeypatch, cfg, cal, state):

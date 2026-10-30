@@ -12,7 +12,7 @@ EnvironmentFile=/etc/wuming/cloud.env
 Environment=PYTHONPATH=/opt/wuming/cloud
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=Asia/Shanghai
-ExecStart=/opt/wuming/.venv/bin/python -m ashare_cloud.auction --output-dir /var/lib/wuming/auction
+ExecStart=/opt/wuming/.venv/bin/python -m ashare_cloud.runner --work-dir /var/lib/wuming --command auction --cloud
 StateDirectory=wuming
 StateDirectoryMode=0700
 UMask=0077

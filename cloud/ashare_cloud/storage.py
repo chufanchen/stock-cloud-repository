@@ -55,11 +55,13 @@ class Store:
         self.manifest = json.loads(obj["Body"].read())
         return self.manifest
 
-    def pull(self, root):
+    def pull(self, root, manifest=None):
         root = Path(root)
-        if not self.head():
+        m = manifest if manifest is not None else self.head()
+        if not m:
             raise RuntimeError("R2 尚未初始化；先执行 bootstrap")
-        m = self.manifest
+        if not m["state_key"].startswith(self.key("states/")) or not m["database_key"].startswith(self.key("databases/")):
+            raise ValueError("备份对象不属于当前项目目录")
         root.mkdir(parents=True, exist_ok=True)
         if any(root.iterdir()):
             raise ValueError("R2 恢复目录必须为空，以免覆盖本地资料")

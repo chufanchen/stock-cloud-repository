@@ -64,7 +64,7 @@ GitHub运行时，这些文件包含在 `daily-report-...` 附件中。服务器
 - `roles`：至少两个分析席位，最后一个必须是审计席位；最多六席。
 - 各席 `focus`：分析职责。各席 `model` 留空沿用 `AI_MODEL`，也可填同一服务商兼容接口下可用的另一模型ID。
 - `moderator_model`：主持人模型，留空同样沿用 `AI_MODEL`。
-- `max_tokens` / `summary_max_tokens`：各席/主持人的单次输出上限。接口必须支持 Chat Completions 的 `max_tokens` 参数和文本JSON响应；不依赖厂商专用JSON模式。
+- `max_tokens` / `summary_max_tokens`：各席/主持人的单次输出上限。默认分析席6000、主持人16000；角色可单独配置 `max_tokens`，审计席默认12000。接口必须支持 Chat Completions 的 `max_tokens` 参数和文本JSON响应；不依赖厂商专用JSON模式。
 - `proposal_context_limit`：送入模型的历史提案数。
 - `enabled: false`：改用旧的单角色文字复盘；`--skip-ai` 则完全不调用模型。
 
@@ -88,3 +88,11 @@ PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.cli review \
 接口返回后、检查点上传前如果机器突然中断，该环节仍可能再次调用模型；不同机器同时启动也可能产生重复调用。因此只选一个日常调度端，R2的条件写入负责拒绝旧状态覆盖新状态，不保证API调用严格只发生一次。
 
 若某天会议一直失败，下一天的交易流程仍可继续；会议只读取已完成的旧记忆。随后补完旧会议不会改写已经冻结的后续会议输入。
+
+## 推理模型输出预算
+
+本地真实测试中，DeepSeek分析席实际使用约3300—5100个输出token；审计席在6000额度下返回 `finish_reason=length` 且正文为空。因此增加了独立角色预算，避免让审计席与简单分析共用过低的上限。默认分析6000、审计12000、汇总16000，是上限而不是固定消费；模型仍可能需要更高额度或更短上下文。
+
+DeepSeek官方说明默认开启思考模式，思考与最终输出共同占用生成额度，可参考 [思考模式](https://api-docs.deepseek.com/guides/thinking_mode/) 和 [Chat Completions接口](https://api-docs.deepseek.com/api/create-chat-completion/)。本实现仍只传通用 `max_tokens`，没有强制关闭思考或加入厂商专有字段。
+
+新默认仅影响首次创建的会议；已开始的会议继续使用其冻结配置。若人工调整失败会议的输出额度，应先备份，记录调整原因和前后预算，并校验既有事实、发言及账本未变化。

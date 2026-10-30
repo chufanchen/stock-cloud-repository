@@ -57,10 +57,36 @@ def initialize(root, legacy, cfg):
     print(f"初始化完成：{meta['stock_count']} 只，历史 {meta['seed_start']} 至 {meta['seed_end']}；现金 {state['cash']:.2f}")
 
 
-def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=None, review_only=False):
+def prepare_observation(root, day, cfg, calendar, state, save):
+    start = state.get('provenance', {}).get('observation_start')
+    if not start or state['settlements'] or calendar.next(day) != start or day != now().date().isoformat():
+        raise ValueError('只能用新观察期前一交易日的实际收盘行情准备首日计划')
+    if start in state['plans']:
+        verify_plan(state['plans'][start])
+        print('新观察期首日计划已冻结，不重复选股。')
+        return
+    collect(root, day, cfg, calendar, **({'checkpoint':save} if save else {}))
+    scan = scan_database(root / 'market.db', day, cfg, calendar)
+    write_json(root / 'scans' / f'{day}.json', scan)
+    plan = build_plan(day, scan, state, cfg, calendar, now().isoformat())
+    state['plans'][start] = plan
+    state['last_plan_hash'] = plan['hash']
+    write_json(root / 'account.json', state)
+    if save:
+        save()
+    print(f'已冻结 {start} 首日计划；观察期尚未开始，没有生成结算或收益。')
+
+
+def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=None, review_only=False, checkpoint=None):
     root = Path(root)
+    save = (lambda: store.push(root)) if store else checkpoint
     state = read_json(root / "account.json")
     check_account(state)
+    start = state.get('provenance', {}).get('observation_start')
+    if start and day < start and not review_only:
+        return prepare_observation(root, day, cfg, calendar, state, save)
+    if start and day >= start and not state['settlements'] and (day != start or day not in state['plans']):
+        raise ValueError('新观察期首日缺少冻结计划或错过首日，停止；不得事后补造')
     if review_only and day not in state["settlements"]:
         raise ValueError("该日尚未结算，不能单独复盘；先运行 run")
     if not calendar.is_session(day):
@@ -80,10 +106,10 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
                 # Auction evidence is optional. Never replace it with current turnover.
                 print("竞价快照未能恢复；继续其他来源，无可靠证据的候选将拒绝买入。", flush=True)
         market = collect(root, day, cfg, calendar,
-                         **({"checkpoint": lambda: store.push(root)} if store else {}))
+                         **({"checkpoint": save} if save else {}))
         # Commit the exact-day market evidence first. A later engine failure remains recoverable.
-        if store:
-            store.push(root)
+        if save:
+            save()
         if not plan and state["last_settled"]:
             raise ValueError("该交易日缺少盘前冻结计划，禁止盘后临时选股成交")
         new_state, settlement = simulate(state, plan, market, day, calendar)
@@ -96,8 +122,8 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
             new_state["last_plan_hash"] = next_plan["hash"]
         write_json(root / "account.json", new_state)
         state = new_state
-        if store:
-            store.push(root)
+        if save:
+            save()
         print(f"模拟结算已保存：总资产 {settlement['equity']:.2f}，当日 {settlement['day_pnl']:+.2f}")
     facts = evidence(state, day, market)
     # Existing meetings (including failed ones) keep their exact inputs across upgrades.
@@ -116,8 +142,8 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
         research_cfg = read_json(RESEARCH_CONFIG)
         research = collect_research(root, day, state, research_cfg)
         facts = add_to_facts(facts, research, research_cfg["max_context_chars"])
-        if store:
-            store.push(root)
+        if save:
+            save()
     meeting_cfg = validate_meeting(meeting_cfg if meeting_cfg is not None else read_json(MEETING_CONFIG))
     error = None
     if skip_ai:
@@ -125,7 +151,7 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
         review = read_json(saved_review) if saved_review.exists() else {"status": "disabled", "content": "本次显式跳过 AI，仅展示程序计算结果。"}
     elif meeting_cfg["enabled"]:
         try:
-            review = run_meeting(root, facts, meeting_cfg, checkpoint=(lambda: store.push(root)) if store else None)
+            review = run_meeting(root, facts, meeting_cfg, checkpoint=save)
         except MeetingError as exc:
             error = str(exc)
             review = {"status": "failed", "kind": "meeting", "error": error, "generated_at": now().isoformat()}
@@ -139,13 +165,13 @@ def execute(root, day, cfg, calendar, store=None, skip_ai=False, meeting_cfg=Non
             review = {"status": "failed", "error": error, "generated_at": now().isoformat()}
     write_json(saved_review, review)
     render(root, facts, review)
-    if store:
-        store.push(root)
+    if save:
+        save()
     if error and cfg["ai_required"]:
         raise RuntimeError(error + "；账本和失败状态已保存，重跑只补复盘。")
 
 
-def main(argv=None):
+def main(argv=None, checkpoint=None):
     parser = argparse.ArgumentParser(description="A股每日模拟盘与研究会议：服务器 / GitHub Actions + R2")
     parser.add_argument("command", choices=("init", "bootstrap", "run", "review", "sync", "status", "restore"))
     parser.add_argument("--state-dir", type=Path, default=Path(".cloud-state"))
@@ -198,11 +224,13 @@ def main(argv=None):
         check_account(read_json(root / "account.json"))
         print(f"仅补齐 {day} 归档所需历史行情；不结算、不生成交易计划、不调用 AI。", flush=True)
         collect(root, day, cfg, cal, archive_only=True,
-                **({"checkpoint": lambda: store.push(root)} if store else {}))
+                checkpoint=(lambda: store.push(root)) if store else checkpoint)
         if file_hash(root / "account.json") != before:
             raise RuntimeError("历史补齐不应修改账户，停止发布")
         if store:
             store.push(root)
+        elif checkpoint:
+            checkpoint()
         print("历史行情补齐完成，账户与交易计划未变化。")
     else:
         day = args.date or now().date().isoformat()
@@ -218,7 +246,7 @@ def main(argv=None):
         if not args.local:
             store = Store()
             store.pull(root)
-        execute(root, day, cfg, cal, store, args.skip_ai, meeting_cfg, review_only=args.command == "review")
+        execute(root, day, cfg, cal, store, args.skip_ai, meeting_cfg, review_only=args.command == "review", checkpoint=checkpoint)
 
 
 if __name__ == "__main__":

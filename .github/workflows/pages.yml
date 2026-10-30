@@ -6,16 +6,13 @@ on:
     branches: [main]
     paths:
       - 'cloud/ashare_cloud/pages.py'
+      - 'cloud/ashare_cloud/publication.py'
       - 'cloud/web/**'
       - 'cloud/pages-requirements.txt'
       - '.github/workflows/pages.yml'
   schedule:
     # 北京时间21:17、22:17、23:17；与服务器的每日任务分开。
-    - cron: '17 13,14,15 * * 1-5'
-  workflow_run:
-    workflows: ['A股每日模拟盘']
-    types: [completed]
-    branches: [main]
+    - cron: '17 1,13,14,15 * * 1-5'
 
 permissions:
   contents: read
@@ -33,6 +30,7 @@ jobs:
       PYTHONUNBUFFERED: '1'
       R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL || secrets.R2_ENDPOINT_URL }}
       R2_BUCKET: ${{ vars.R2_BUCKET || secrets.R2_BUCKET }}
+      R2_PUBLIC_BUCKET: ${{ vars.R2_PUBLIC_BUCKET }}
       R2_PREFIX: ${{ vars.R2_PREFIX || secrets.R2_PREFIX || 'wuming-v2' }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_PAGES_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_PAGES_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY }}
@@ -47,7 +45,7 @@ jobs:
           cache-dependency-path: cloud/pages-requirements.txt
       - name: 安装网页构建依赖
         run: python -m pip install -r cloud/pages-requirements.txt
-      - name: 只读下载复盘归档并生成静态网页
+      - name: 只读下载展示结果包并生成静态网页
         run: python -m ashare_cloud.pages --output _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4

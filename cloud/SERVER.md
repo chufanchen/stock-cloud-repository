@@ -1,105 +1,90 @@
-# 用自己的服务器运行
+# 本地持久运行与服务器部署
 
-推荐部署为：**服务器承担每天运行，GitHub保存代码与执行测试，Actions保留手动补跑，R2保存权威状态与研究记忆。** 服务器仍通过通用模型接口调用AI，无需本地GPU。
+主状态是 `<work-dir>/state/`。每次运行直接复用本地数据库与账本，R2 不再是日常启动时的状态来源。默认 Mac 工作目录为项目下 `.local-runtime/`。此文取代旧的“每次从R2下载、成功后删除数据库”部署说明。
 
-展示层由 [GitHub Pages](PAGES.md) 承担，GitHub在21:17、22:17、23:17读取最新结果发布网站；服务器无需部署网页服务，也无需向GitHub推送账本文件。
+## 迁移步骤
 
-这里提供Linux + systemd配置模板，需在实际服务器上安装并核对网络、凭据与运行结果。仅修改仓库变量不会部署服务器。也可以沿用Actions执行每日流程，两者使用同一套代码。
+1. 停止其他设备的定时任务。新版 GitHub `daily.yml` 已取消定时计算，只保留迁移说明。
+2. 配置根目录 `.cloud.env`，不要修改旧账本。部署代码可从 GitHub 获取；Python3.14 与依赖见根 README。
+3. 使用 `desktop task --command restore` 从旧 R2 导入一次，目标必须不存在。或 `--command import --source /已有状态目录` 从本地一致副本导入。
+4. `desktop task --command backtest` 核验已归档结算；`--command publish` 备份并发布现有结果。步骤失败时检查原因，不重置账本。
+5. Mac 用 `desktop install` 安装当前用户 LaunchAgent。运行日期与时间统一以 Asia/Shanghai 判断；电脑休眠期间不会采集，不伪造漏采数据。
 
-## 1. 准备代码和环境
-
-先按 [项目README](../README.md) 配置密钥，并确认R2已初始化。已有R2时直接恢复，不要重建；新会议目录会自动加入现有状态。
-
-从Mac导出干净代码目录，再传到服务器 `/opt/wuming`，或从当前代码仓库检出到该路径。不要复制Mac的 `.venv` 或原始五个席位的大数据库。
-
-服务器需要可执行的Python 3.14、网络访问R2/行情/模型服务。以下示例假设Python 3.14已安装在系统可用路径，且你有sudo权限：
+状态请直接读取 `.local-runtime/last-run.json`，账户只读检查使用：
 
 ```bash
-sudo useradd --system --user-group --home-dir /var/lib/wuming --no-create-home wuming
-sudo install -d -o wuming -g wuming -m 700 /var/lib/wuming
-sudo python3.14 -m venv /opt/wuming/.venv
-sudo /opt/wuming/.venv/bin/python -m pip install -r /opt/wuming/cloud/requirements.lock
-sudo install -d -m 700 /etc/wuming
-if ! sudo test -f /etc/wuming/cloud.env; then
-  sudo install -m 600 /opt/wuming/cloud/.env.example /etc/wuming/cloud.env
-fi
-sudoedit /etc/wuming/cloud.env
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.cli status --state-dir .local-runtime/state --local
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command run
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command review --date 2026-10-27
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command sync
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command backtest
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command publish
 ```
 
-如果用户或配置文件已存在，跳过对应创建步骤；不要用模板覆盖已填写的密钥。服务以 `wuming` 普通用户运行，代码和虚拟环境需可读/可执行。不要把Python放在个人家目录内，服务模板限制了家目录访问。
+`run` 只允许收盘后；补历史日必须有真实归档。缺冻结计划或中间未结算日会阻止后续成交，迁移不绕过这些约束。`review` 仅处理已经结算的日期。首次恢复后要检查 `last_settled` 与 `plans`，确认是否存在历史缺口。
 
-环境文件填写：`R2_ENDPOINT_URL`、`R2_BUCKET`、`R2_PREFIX`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_API_KEY`，以及 TickFlow 首选源的 `TICKFLOW_API_KEY`（可选 `TICKFLOW_BASE_URL`）和可选的 `TUSHARE_TOKEN`。字段与Actions相同，无需新增会议专用密钥。文件使用 `KEY=value`，不加 `export`，也不要依赖 `$变量` 展开。
+`--offline` 只关闭 R2 备份/发布；run/review 仍可能调用数据或模型接口，不表示完全断网。纯离线核验用 `--command backtest --offline`。
 
-## 2. 先选定日常执行端
-
-在GitHub仓库的 **Settings → Secrets and variables → Actions → Variables** 新增：
+## 数据与备份
 
 ```text
-DAILY_EXECUTOR = server
+.local-runtime/
+  state/market.db             持久行情库，增量更新
+  state/account.json          模拟账本与冻结计划
+  state/snapshots/            精确日期行情归档
+  state/auctions/             实际采集竞价证据
+  state/meeting/              会议与记忆
+  state/research/             研究数据与待验证提案
+  state/backtests/            重放结果与输入哈希
+  runs/<编号>/run.json        每次任务记录
+  last-run.json               最近任务、备份版本和发布状态
+  schedule.json               定时窗口执行记录
+  logs/                      Mac 调度日志
 ```
 
-这样每天的Actions任务会跳过，手动 `Run workflow` 和代码测试仍可用。若选择Actions主运行，删除该变量或设置 `github`，并保持服务器timer关闭。未设置时默认保留原Actions定时行为。
+R2 原 `<prefix>/HEAD.json` 保留为旧迁移来源，新运行不写它。
 
-不要同时把服务器和Actions都设为自动主运行。服务器有本地进程锁，R2也会拒绝并发旧状态提交，但这不能避免重复API费用。
+- `<prefix>/backups/checkpoints/`：轻量私有进度包，行情或会议阶段保存；不含数据库，不能单独作为完整恢复点。
+- `<prefix>/backups/HEAD.json`：最近完整备份。
+- `<prefix>/backups/versions/<编号>.json`：指定版本的完整备份清单。
+- `<prefix>/backups/databases/`：SQLite backup API 生成一致副本后压缩，包含已提交 WAL；相同哈希复用。每次任务结束或失败均尝试完整备份，增量只发生在本地采集，不宣称对象存储上传是块级增量。
+- `<prefix>/publications/`：公开字段结果包，不含完整账户、数据库、模型输入或私有记忆。可用独立 R2_PUBLIC_BUCKET 隔离权限。
 
-## 3. 安装定时配置并手动检查
+本地进度先写盘，备份失败不撤销结算；命令仍以失败退出提醒云端不完整，使用 publish 重试即可，不需要重新结算。不要同时在两台设备运行同一账户，本地锁只保护一台主机。完整备份的远端 HEAD 有条件更新，但不能代替跨机器主运行端管理。
+
+恢复到新目录：
 
 ```bash
-sudo install -m 644 /opt/wuming/cloud/deploy/wuming-daily.service /etc/systemd/system/
-sudo install -m 644 /opt/wuming/cloud/deploy/wuming-daily.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl start wuming-daily.service
-sudo journalctl -u wuming-daily.service -n 100 --no-pager
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.desktop task --command restore \
+  --from-backup --work-dir .local-runtime-recovered \
+  --version versions/实际32位编号.json
 ```
 
-首次手动检查安排在交易日北京时间20:00后；休市日会正常跳过，不能因此证明行情和模型接口已验证。确认日志中的结算和六个会议环节完成后，再启用定时：
+不传 version 读取最近完整备份。先比对账户、哈希链、数据库和最后结算日期，再停掉原调度并切换目录。禁止把旧备份直接覆盖正在运行的状态。历史备份暂不自动删除；设置保留期前确认被保留清单引用的数据库和状态包仍存在，不能直接对所有 databases 对象按年龄删除。
+
+## Mac 定时与停用
+
+安装器生成 `~/Library/LaunchAgents/org.wuming.local-daily.plist`，登录后每15秒检查北京时间窗口。日常任务20:37与21:37各保留5分钟启动窗口；竞价09:24:50至09:25:50启动。休市跳过。失败不会在同一窗口无限重试。机器唤醒发生在窗口外时不追补。
 
 ```bash
-sudo systemctl enable --now wuming-daily.timer
-systemctl list-timers wuming-daily.timer
+launchctl print gui/$(id -u)/org.wuming.local-daily
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/org.wuming.local-daily.plist
 ```
 
-模板明确使用 `Asia/Shanghai`，每周一至周五20:37运行、21:37重试，程序再检查A股交易日历。timer不自动补执行关机期间错过的时间，避免重启时用今天数据冒充历史。已有归档可手动补跑；漏行情日仍须按主部署指南处理。
+Mac 对 Documents 的访问可能受系统隐私设置限制；出现 Operation not permitted 时检查日志和终端/Python文件访问权限。安装器不会修改系统睡眠设置。当前无额外消息通知服务。
 
-同一service尚未结束时，systemd不会再启动一份。单次上限55分钟；各席成功结果逐步保存到R2，超时可在下一次恢复。定时行为参考 [systemd.timer官方文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html)。
+## Linux
 
-## 4. 查看结果和恢复
+把干净代码放 `/opt/wuming`，Python环境放 `/opt/wuming/.venv`，凭据 `/etc/wuming/cloud.env` 权限600，工作目录 `/var/lib/wuming` 所属专用 wuming 用户。恢复、核验并发布一次后，安装 `cloud/deploy/wuming-daily.*` 与 `wuming-auction.*`。
 
-每次运行创建独立目录：
-
-```text
-/var/lib/wuming/runs/<时间-随机编号>/
-  run.json                 运行状态与开始/结束时间
-  state/reports/           日报
-  state/meeting/           完整讨论和逐日记忆
-  state/research/          累计研究提案
-```
-
-每次从R2读取最新版本，避免复用旧账本。成功后只删除该次临时恢复的 `market.db` 副本，报告及元数据保留；数据库已在R2。失败目录完整保留便于排查。长期运行要定期清理已确认不需要的旧运行目录；R2历史版本保留策略沿用主指南。
-
-手动重跑今天：`sudo systemctl start wuming-daily.service`。补某个旧日期的会议，可以先停止timer并确认service已结束，再临时运行：
+service 中的 runner 固定复用 `/var/lib/wuming/state` 并带 `--cloud`。模板仍由 systemd 设置环境文件；不要把 Mac 虚拟环境拷到 Linux。回测可独立执行：
 
 ```bash
-sudo systemctl stop wuming-daily.timer
-sudo systemd-run --unit=wuming-review --wait --collect \
-  --property=User=wuming --property=Group=wuming \
-  --property=WorkingDirectory=/opt/wuming \
-  --property=EnvironmentFile=/etc/wuming/cloud.env \
-  --property=UMask=0077 \
-  --setenv=PYTHONPATH=/opt/wuming/cloud --setenv=TZ=Asia/Shanghai \
-  /opt/wuming/.venv/bin/python -m ashare_cloud.runner \
-  --work-dir /var/lib/wuming --command review --date 2026-10-26
-sudo systemctl start wuming-daily.timer
+PYTHONPATH=cloud .venv/bin/python -m ashare_cloud.runner --work-dir /var/lib/wuming --command backtest --cloud
 ```
 
-替换为实际已结算日期。服务器不可用时，也可在Actions手动选择 `mode=review` 和日期，读取同一个R2前缀继续。恢复成功后再恢复单一主调度端。
+切换到服务器前卸载 Mac 定时任务，使用最新完整备份迁移；从旧顶层 HEAD 恢复会遗漏新架构期间的进度。
 
-如果以后要把结算和AI研究分开调度，可先 `run --skip-ai` 保存结算，再 `review --date ...` 只做会议；两个任务按顺序执行并使用同一R2前缀。本次默认保持一个完整任务，部署更简单。
+## 新观察期
 
-当前未配置服务器故障推送：失败会记录在systemd状态、journal和 `run.json`。可接入你已有的服务器监控；没有代你发送任何通知或配置消息服务。
-
-## 5. 可选：只用服务器采集早盘竞价
-
-没有 Tushare 竞价权限时，可安装 `wuming-auction.service` / `wuming-auction.timer`，北京时间09:24:50启动腾讯免Key采样。证据单独存入R2，晚间自动读取。无需改变晚间执行端，`DAILY_EXECUTOR=github` 时仍可启用服务器竞价采集。
-
-详细安装命令、同日冻结计划要求、金额推定口径和首次早盘验证步骤见 [竞价采集与回退](AUCTION.md)。模板未自动部署；每个账户只启用一个采集端。
+仅在用户明确确认后使用 `local_state.start_observation`：从已校验空仓账户承接现金到新目录，并记录原账本哈希和最后结算日。旧目录只读保留；不迁移未完成会议或拼接收益。`.local-active.json` 可记录 `work_dir`，供 Mac desktop 默认选择活动目录。首次运行在开始日前一交易日收盘后只冻结首日计划；开始日若计划缺失，停止，不补造。

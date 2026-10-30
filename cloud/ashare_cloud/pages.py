@@ -142,7 +142,38 @@ def load_public_data(root, limit=365):
             proposals.append({**{k: text(p.get(k), 1500) for k in ("id", "title", "hypothesis", "created_date", "updated_date")},
                               "observations": selected_rows(p.get("observations"),
                                   ("date", "evidence", "test_plan", "rejection_criterion", "data_needed"))})
-    return {"reports": reports, "proposals": proposals}
+    plans = []
+    observation = {}
+    account_path = root / 'account.json'
+    if account_path.exists():
+        from .engine import verify_plan
+        account = read_json(account_path)
+        provenance = account.get('provenance', {})
+        if provenance.get('observation_start'):
+            observation = {'start': text(provenance['observation_start'],10), 'initial_cash': number(provenance.get('original_seed_cash'))}
+        for day, plan in sorted(read_json(account_path).get('plans', {}).items())[-limit:]:
+            verify_plan(plan)
+            if day != plan['trade_date']:
+                raise ValueError('预案日期不一致')
+            cfg = plan['config']
+            plans.append({'date': day, 'data_date': plan['data_date'], 'frozen_at': plan['frozen_at'],
+                'strategy_version': text(plan.get('strategy_version'), 100), 'paused': plan['buy_paused'],
+                'picks': selected_rows(plan['picks'], ('code','name','pos','prev_close')),
+                'rules': [f"高开须为正且不超过{cfg['max_chase_pct']}%", '缺少可靠竞价成交额时拒绝模拟买入',
+                          f"单笔金额不超过竞价成交额的{cfg['liquidity_max_ratio']*100:g}%",
+                          '开盘门槛、持仓与现金条件以固定交易引擎判定；候选不代表成交']})
+    backtests = []
+    for path in sorted((root / 'backtests').glob('*.json')):
+        raw = read_json(path)
+        if raw.get('kind') != 'frozen_plan_replay':
+            continue
+        backtests.append({**{k: text(raw.get(k), 1500) for k in ('id','title','kind','status','start','end','generated_at','reason')},
+            **{k: number(raw.get(k)) for k in ('initial_equity','final_equity','return_pct','max_drawdown_pct','buys','sells','sessions')},
+            'limitations': string_list(raw.get('limitations')), 'days': selected_rows(raw.get('days'), ('date','equity','day_pnl'))})
+    backtests.sort(key=lambda b: b['generated_at'])
+    runtime = read_json(root / 'runtime-status.json') if (root / 'runtime-status.json').exists() else {}
+    return {"reports": reports, "proposals": proposals, 'plans': plans, 'backtests': backtests[-30:],
+            'observation': observation, 'runtime': {k: text(runtime.get(k), 100) for k in ('command','status','started_at','finished_at')}}
 
 
 def prose(content):
@@ -180,7 +211,8 @@ def empty(title, description):
 
 def shell(title, subtitle, body, active="overview", prefix="", demo=False, updated=None):
     navigation = [("overview", "index.html", "01", "每日总览"), ("history", "history.html", "02", "历史日报"),
-                  ("meeting", "meeting.html", "03", "AI 会议室"), ("research", "research.html", "04", "研究提案")]
+                  ("meeting", "meeting.html", "03", "AI 会议室"), ("research", "research.html", "04", "研究提案"),
+                  ("plans", "plans.html", "05", "早盘预案"), ("backtests", "backtests.html", "06", "回测结果")]
     nav = "".join(f'<a class="nav-item {"active" if key == active else ""}" href="{prefix}{url}"><span>{n}</span>{label}</a>'
                   for key, url, n, label in navigation)
     banner = '<div class="demo-banner">页面设计预览 · 以下为演示数据，不代表实际交易或模型输出</div>' if demo else ""
@@ -279,13 +311,13 @@ def meeting_body(report, prefix=""):
     return body + research_sources_table(report)
 
 
-def build_site(root, output, source=None, demo=False):
+def build_site(root, output, source=None, demo=False, public_data=None):
     root, output = Path(root), Path(output)
     if output.resolve() == root.resolve() or output.resolve().is_relative_to(root.resolve()) or root.resolve().is_relative_to(output.resolve()):
         raise ValueError("网页输出必须与私有状态目录分开")
     if output.exists() and any(output.iterdir()):
         raise ValueError("网页输出目录必须为空，避免夹带历史文件或密钥")
-    data = load_public_data(root)
+    data = load_public_data(root) if public_data is None else public_data
     reports, proposals = data["reports"], data["proposals"]
     latest = reports[-1] if reports else None
     updated = latest["date"] if latest else None
@@ -309,6 +341,12 @@ def build_site(root, output, source=None, demo=False):
         body = alert + empty("等待第一份收盘复盘", "每个交易日完成模拟结算与AI讨论后，最新记录会自动出现在这里。当前没有可展示的日报，不显示虚构收益。")
         body += '<div class="intro-grid">' + "".join(f'<section class="panel"><span class="eyebrow">{n}</span><h2>{title}</h2><p class="muted">{desc}</p></section>' for n, title, desc in
                  [("01 / RECORD", "每日结算", "记录模拟资产、成交与未买入原因。"), ("02 / DISCUSS", "多角色复盘", "独立分析，交叉质疑，保留不同意见。"), ("03 / RESEARCH", "研究提案", "把新想法写成可以验证的假设。")]) + '</div>'
+    observation = data.get('observation', {})
+    if observation.get('start'):
+        body = '<div class="notice">新观察期自 ' + esc(observation['start']) + ' 起；初始模拟现金 ' + money(observation['initial_cash']) + ' 元。旧账户独立归档，不拼接收益。</div>' + body
+    runtime = data.get('runtime', {})
+    if runtime.get('started_at'):
+        body = '<div class="notice">最近任务：' + esc(runtime.get('command')) + ' · ' + esc(runtime.get('status')) + ' · ' + esc(runtime.get('started_at')) + '（北京时间）。日报日期与任务日期分别显示。</div>' + body
     save("index.html", "每日复盘", "看清交易结果，也记录判断的依据。", body)
     history = '<div class="section-title"><p class="muted">共 ' + str(len(reports)) + ' 份归档日报</p><label class="search">查找日期<input type="search" data-filter placeholder="例如 2026-10" aria-label="查找日报日期"></label></div>'
     history += history_rows(reports) if reports else empty("还没有历史日报", "第一份复盘生成后即可按日期回看。")
@@ -330,6 +368,19 @@ def build_site(root, output, source=None, demo=False):
     for r in reports:
         save(f'days/{r["date"]}.html', "收盘复盘", r["date"] + " · 当日归档", day_body(r, reports), "history", "../")
         save(f'meetings/{r["date"]}.html', "AI 会议室", r["date"] + " · 当日讨论", meeting_body(r), "meeting", "../")
+    plan_body = ''
+    for plan in reversed(data.get('plans', [])):
+        plan_body += '<section class="panel"><h2>' + esc(plan['date']) + ' · 盘前冻结预案</h2><p>数据截至 ' + esc(plan['data_date']) + '；冻结于 ' + esc(plan['frozen_at']) + '</p><p>' + ('暂停新买入' if plan['paused'] else '候选待开盘条件验证') + '</p>'
+        plan_body += candidate_table({'next_plan': {'date': plan['date'], 'paused': plan['paused'], 'count': len(plan['picks']), 'picks': plan['picks']}})
+        plan_body += prose('\n'.join('- ' + r for r in plan['rules'])) + '</section>'
+    save('plans.html', '早盘预案', '只展示事先冻结的计划；没有计划时不补造候选。', plan_body or empty('暂无冻结预案', '收盘流程成功后生成下一交易日计划。'), 'plans')
+    backtest_body = ''
+    for b in reversed(data.get('backtests', [])):
+        backtest_body += '<section class="panel"><h2>' + esc(b['title']) + '</h2><p>' + esc(b['start']) + ' 至 ' + esc(b['end']) + ' · ' + ('重放一致' if b['status'] == 'ok' else '未通过') + '</p><p>' + esc(b['reason']) + '</p>'
+        if b['status'] == 'ok':
+            backtest_body += '<p>区间收益 ' + money(b['return_pct']) + '% · 最大回撤 ' + money(b['max_drawdown_pct']) + '% · ' + esc(b['sessions']) + ' 个交易日</p>' + trend(b['days'])
+        backtest_body += prose('\n'.join(b['limitations'])) + '</section>'
+    save('backtests.html', '回测结果', '冻结计划重放与结算核验；研究提案不会自动修改交易规则。', backtest_body or empty('暂无已运行的回测', '本地运行 backtest 后发布。缺失数据或核验失败将明确显示。'), 'backtests')
     (output / ".nojekyll").write_text("")
     (output / "publication.json").write_text(json.dumps({"generated_at": now().isoformat(), "latest_report": updated,
         "report_count": len(reports), "proposal_count": len(proposals), "demo": demo}, ensure_ascii=False), encoding="utf-8")
@@ -340,14 +391,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="从R2或本地归档只读生成GitHub Pages静态网页")
     parser.add_argument("--state-dir", type=Path, help="使用本地归档；省略则读取R2")
     parser.add_argument("--output", type=Path, default=Path("_site"))
+    parser.add_argument("--legacy-r2", action="store_true", help="显式兼容旧状态包；新部署默认仅读取公开结果包")
     args = parser.parse_args(argv)
     if args.state_dir:
         build_site(args.state_dir, args.output)
     else:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "source"
-            source = pull_source(root, Store())
-            build_site(root, args.output, source=source)
+            if args.legacy_r2:
+                source = pull_source(root, Store())
+                build_site(root, args.output, source=source)
+            else:
+                from .publication import fetch
+                bundle = fetch()
+                build_site(root, args.output, public_data=bundle['data'])
 
 
 if __name__ == "__main__":

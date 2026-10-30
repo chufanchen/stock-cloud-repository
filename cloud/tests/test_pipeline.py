@@ -63,9 +63,9 @@ def test_workflow_contains_state_serialization_and_no_write_permissions():
     import yaml
     root = Path(__file__).parents[2]
     flow = yaml.safe_load((root / ".github/workflows/daily.yml").read_text())
-    assert flow["concurrency"]["cancel-in-progress"] is False
     assert flow["permissions"] == {"contents": "read"}
-    assert flow["jobs"]["daily"]["env"]["TZ"] == "Asia/Shanghai"
+    assert "secrets." not in (root / ".github/workflows/daily.yml").read_text()
+    assert "ashare_cloud.cli" not in (root / ".github/workflows/daily.yml").read_text()
 
 
 def test_three_day_pipeline_with_plan_chain(tmp_path, monkeypatch, cfg, cal, state):

@@ -1,80 +1,14 @@
-name: A股每日模拟盘
+name: 本地运行说明
 
 on:
-  schedule:
-    # UTC 12:37 / 13:37 = 北京时间20:37 / 21:37。第二次用于补偿失败，已完成则不重复成交。
-    # Tushare stk_auction_o 通常20:00更新。休市日由XSHG日历跳过。
-    - cron: '37 12,13 * * 1-5'
   workflow_dispatch:
-    inputs:
-      trade_date:
-        description: 'run/review留空为今天；sync留空使用最新归档收盘快照（YYYY-MM-DD）'
-        required: false
-        type: string
-      mode:
-        description: 'run=结算、选股与会议；review=仅补会议；sync=仅续补历史行情，可跨日运行'
-        type: choice
-        default: run
-        options: [run, review, sync]
-
 permissions:
   contents: read
-
-concurrency:
-  group: ashare-paper-account
-  cancel-in-progress: false
-
 jobs:
-  daily:
-    # Server can own the schedule; manual disaster recovery remains available.
-    if: github.event_name == 'workflow_dispatch' || vars.DAILY_EXECUTOR != 'server'
+  local-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
-    env:
-      TZ: Asia/Shanghai
-      PYTHONPATH: cloud
-      PYTHONUNBUFFERED: '1'
-      R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL || secrets.R2_ENDPOINT_URL }}
-      R2_BUCKET: ${{ vars.R2_BUCKET || secrets.R2_BUCKET }}
-      R2_PREFIX: ${{ vars.R2_PREFIX || secrets.R2_PREFIX || 'wuming-v2' }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AI_BASE_URL: ${{ vars.AI_BASE_URL || secrets.AI_BASE_URL }}
-      AI_MODEL: ${{ vars.AI_MODEL || secrets.AI_MODEL }}
-      AI_API_KEY: ${{ secrets.AI_API_KEY }}
-      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
-      TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
-      TICKFLOW_BASE_URL: ${{ vars.TICKFLOW_BASE_URL || 'https://api.tickflow.org' }}
-      TRADE_DATE: ${{ inputs.trade_date }}
-      RUN_MODE: ${{ inputs.mode || 'run' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-          cache: pip
-          cache-dependency-path: cloud/requirements.lock
-      - name: 安装固定版本依赖
-        run: python -m pip install -r cloud/requirements.lock
-      - name: 读取R2、结算、选股、复盘并保存
-        shell: bash
+      - name: 日常计算已迁移至本地或服务器
         run: |
-          args=()
-          if [ -n "$TRADE_DATE" ]; then
-            args+=(--date "$TRADE_DATE")
-          fi
-          python -m ashare_cloud.cli "$RUN_MODE" --state-dir .cloud-state "${args[@]}"
-      - name: 保存可下载日报
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .cloud-state/reports/
-            .cloud-state/scans/
-            .cloud-state/meeting/
-            .cloud-state/research/
-            .cloud-state/diagnostics/
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 30
+          echo '行情、模拟结算和AI会议由本地定时任务运行。'
+          echo 'GitHub Actions仅测试代码和发布网页。部署步骤见cloud/SERVER.md。'

@@ -58,6 +58,36 @@ def test_independent_analysis_audit_summary_and_idempotence(tmp_path, monkeypatc
     assert read_json(tmp_path / "research/proposals.json") == proposals
 
 
+def test_role_output_budget_and_moderator_budget_are_applied_and_frozen(tmp_path, monkeypatch):
+    config = read_json(meeting.DEFAULT_CONFIG)
+    config.update(max_tokens=6000, summary_max_tokens=16000)
+    config["roles"][-1]["max_tokens"] = 12000
+    calls, budgets = [], []
+    model = fake_model(calls, fail_at=5)
+    def call(*a, **kw):
+        budgets.append(kw["max_tokens"])
+        return model(*a, **kw)
+    monkeypatch.setattr(meeting, "chat_completion", call)
+    with pytest.raises(meeting.MeetingError):
+        meeting.run_meeting(tmp_path, {"date": "2026-10-19"}, config)
+    assert budgets == [6000, 6000, 6000, 6000, 12000]
+    model = fake_model([])
+    # A configuration edit must not silently alter a started meeting's budgets.
+    changed = copy.deepcopy(config)
+    changed["roles"][-1]["max_tokens"] = 9000
+    changed["summary_max_tokens"] = 10000
+    meeting.run_meeting(tmp_path, {"date": "2026-10-19"}, changed)
+    assert budgets[-2:] == [12000, 16000]
+
+
+@pytest.mark.parametrize("value", [True, 0, 16001, "12000"])
+def test_invalid_role_output_budget_rejected(value):
+    config = read_json(meeting.DEFAULT_CONFIG)
+    config["roles"][-1]["max_tokens"] = value
+    with pytest.raises(ValueError, match="输出额度"):
+        meeting.validate_config(config)
+
+
 def test_failure_checkpoints_to_r2_and_resumes_only_incomplete_stages(tmp_path, monkeypatch):
     root = tmp_path / "source"
     root.mkdir()
